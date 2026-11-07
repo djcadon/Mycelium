@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Dark background tile -->
+  <rect width="64" height="64" rx="14" fill="#090d16"/>
+
+  <defs>
+    <!-- Bioluminescent gradient -->
+    <linearGradient id="myceliumGlow" x1="32" y1="8" x2="32" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="50%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+
+    <linearGradient id="capGrad" x1="16" y1="8" x2="48" y2="28" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6ee7b7"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Mushroom Cap -->
+  <path d="M14 26 C14 13, 22 8, 32 8 C42 8, 50 13, 50 26 C46 27.5, 38 28.5, 32 28.5 C26 28.5, 18 27.5, 14 26 Z" 
+        fill="url(#capGrad)" />
+
+  <!-- Cap Bioluminescent Dots / Nodes -->
+  <circle cx="25" cy="16" r="1.8" fill="#ecfdf5" opacity="0.9"/>
+  <circle cx="37" cy="15" r="2.2" fill="#ecfdf5" opacity="0.9"/>
+  <circle cx="32" cy="21" r="1.5" fill="#ecfdf5" opacity="0.8"/>
+
+  <!-- Mushroom Stem -->
+  <path d="M28 28 C28.5 33, 29 37, 28 41 C27.5 43, 36.5 43, 36 41 C35 37, 35.5 33, 36 28 Z" 
+        fill="#a7f3d0" />
+
+  <!-- Mycelium Root / Mesh Network Structure (Branching Hyphae) -->
+  <g stroke="url(#myceliumGlow)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main root branches -->
+    <path d="M30 42 C27 46, 20 47, 13 46" />
+    <path d="M32 42 C32 48, 32 52, 32 57" />
+    <path d="M34 42 C37 46, 44 47, 51 46" />
+
+    <!-- Sub-branches / Hyphal mesh links -->
+    <path d="M22 46.5 C19 50, 16 54, 11 55" />
+    <path d="M25 47 C27 51, 26 55, 23 57" />
+    <path d="M32 48 C28 51, 30 55, 29 57" />
+    <path d="M32 49 C36 51, 35 54, 38 56" />
+    <path d="M42 46.5 C45 50, 48 54, 53 55" />
+    <path d="M39 47 C38 51, 39 55, 42 57" />
+
+    <!-- Cross-mesh interconnecting hyphae -->
+    <path d="M19 50 C24 52, 28 51, 32 48" stroke-dasharray="1.5 2.5" opacity="0.6"/>
+    <path d="M32 48 C36 51, 40 52, 45 50" stroke-dasharray="1.5 2.5" opacity="0.6"/>
+  </g>
+
+  <!-- Mycelium Mesh Nodes (Endpoints) -->
+  <circle cx="13" cy="46" r="1.8" fill="#38bdf8"/>
+  <circle cx="11" cy="55" r="1.8" fill="#34d399"/>
+  <circle cx="23" cy="57" r="1.8" fill="#38bdf8"/>
+  <circle cx="32" cy="57" r="2" fill="#34d399"/>
+  <circle cx="38" cy="56" r="1.8" fill="#38bdf8"/>
+  <circle cx="42" cy="57" r="1.8" fill="#34d399"/>
+  <circle cx="51" cy="46" r="1.8" fill="#38bdf8"/>
+  <circle cx="53" cy="55" r="1.8" fill="#34d399"/>
+</svg>
