@@ -1,11 +1,12 @@
 import React from 'react';
-import { Radio, AlertTriangle, Zap, Power, Network } from 'lucide-react';
+import { AlertTriangle, Zap, Power, Network, Wifi, Activity } from 'lucide-react';
 import type { MeshNode, MeshLink, HopPacket } from '../types/mesh';
 
 interface NetworkHUDProps {
   nodes: MeshNode[];
   links: MeshLink[];
   packets: HopPacket[];
+  isLiveConnected: boolean;
   onTriggerPacket: (originId: string, targetId: string, type: 'HEARTBEAT' | 'SOS' | 'DATA') => void;
   onToggleNodeStatus: (nodeId: string) => void;
   selectedNode: MeshNode | null;
@@ -15,6 +16,7 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
   nodes,
   links,
   packets,
+  isLiveConnected,
   onTriggerPacket,
   onToggleNodeStatus,
   selectedNode,
@@ -35,14 +37,20 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-lg font-bold tracking-wider text-slate-100 uppercase">
-                  Mycelium <span className="text-emerald-400 font-mono text-sm">P2P Mesh</span>
+                  Mycelium <span className="text-emerald-400 font-mono text-sm">3D RF MESH</span>
                 </h1>
-                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 border border-emerald-500/30">
-                  PURE AD-HOC (NO ROUTER)
-                </span>
+                {isLiveConnected ? (
+                  <span className="flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 border border-emerald-500/40 animate-pulse">
+                    <Wifi className="h-3 w-3" /> LIVE RF BRIDGE ACTIVE
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 rounded-full bg-sky-500/20 px-2 py-0.5 text-[10px] font-semibold text-sky-300 border border-sky-500/30">
+                    <Activity className="h-3 w-3" /> SIMULATION ENGINE
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-400">
-                Decentralized Peer-to-Peer Mesh • Equal Autonomous Nodes
+                Physics-based 3D Spatial Localization • Force-Directed Relaxation
               </p>
             </div>
           </div>
@@ -82,19 +90,48 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
             Mesh Actions
           </span>
           <button
-            onClick={() => onTriggerPacket('peer-1', 'peer-4', 'DATA')}
+            onClick={() => {
+              const ids = nodes.map(n => n.id);
+              if (ids.length >= 2) onTriggerPacket(ids[0], ids[ids.length - 1], 'DATA');
+            }}
             className="flex items-center gap-2 rounded-lg bg-emerald-500/20 px-3 py-2 text-xs font-semibold text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition cursor-pointer"
           >
-            <Zap className="h-4 w-4" /> Send Packet (Peer 1 ➔ Peer 4)
+            <Zap className="h-4 w-4" /> Broadcast Multi-Hop Packet
           </button>
           <button
-            onClick={() => onTriggerPacket('peer-4', 'peer-1', 'SOS')}
+            onClick={() => {
+              const ids = nodes.map(n => n.id);
+              if (ids.length >= 2) onTriggerPacket(ids[ids.length - 1], ids[0], 'SOS');
+            }}
             className="flex items-center gap-2 rounded-lg bg-red-500/20 px-3 py-2 text-xs font-semibold text-red-300 border border-red-500/30 hover:bg-red-500/30 transition cursor-pointer"
           >
-            <AlertTriangle className="h-4 w-4" /> Broadcast SOS from Peer 4
+            <AlertTriangle className="h-4 w-4" /> Trigger Remote SOS Alert
           </button>
         </div>
       </div>
+
+      {/* Zero Nodes Awaiting State */}
+      {nodes.length === 0 && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="pointer-events-auto rounded-2xl border border-emerald-500/30 bg-slate-900/90 p-6 text-center shadow-2xl backdrop-blur-xl max-w-md">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 mb-3">
+              <Wifi className="h-6 w-6 animate-pulse" />
+            </div>
+            <h3 className="font-mono text-sm font-bold uppercase tracking-wider text-slate-100">
+              Scanning for BLE Mesh Nodes
+            </h3>
+            <p className="mt-2 text-xs text-slate-400 leading-relaxed">
+              Wireless Bluetooth bridge listening over the air. Start a Mycelium node to watch it appear in 3D:
+            </p>
+            <code className="mt-3 block rounded-lg bg-slate-950 p-2.5 font-mono text-[11px] text-emerald-300 border border-slate-800 text-left">
+              python3 ble.py listen
+            </code>
+            <p className="mt-2 text-[11px] text-slate-500">
+              Zero USB cables required — pure over-the-air BLE discovery!
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Selected Peer Inspector */}
       {selectedNode && (
@@ -127,14 +164,14 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
 
             <div className="mt-3 grid grid-cols-4 gap-3 text-center">
               <div className="rounded-lg bg-slate-800/50 p-2 border border-slate-800">
-                <span className="text-[11px] text-slate-400 block">Battery</span>
-                <span className="font-mono text-xs font-bold text-slate-200">{selectedNode.battery}%</span>
+                <span className="text-[11px] text-slate-400 block">3D Coordinates</span>
+                <span className="font-mono text-xs font-bold text-sky-400">
+                  {selectedNode.position.map(n => Math.round(n)).join(', ')}
+                </span>
               </div>
               <div className="rounded-lg bg-slate-800/50 p-2 border border-slate-800">
-                <span className="text-[11px] text-slate-400 block">Temperature</span>
-                <span className="font-mono text-xs font-bold text-slate-200">
-                  {selectedNode.sensors?.temperature ?? 24}°C
-                </span>
+                <span className="text-[11px] text-slate-400 block">Battery</span>
+                <span className="font-mono text-xs font-bold text-slate-200">{selectedNode.battery}%</span>
               </div>
               <div className="rounded-lg bg-slate-800/50 p-2 border border-slate-800">
                 <span className="text-[11px] text-slate-400 block">Direct Neighbors</span>
@@ -143,8 +180,8 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
                 </span>
               </div>
               <div className="rounded-lg bg-slate-800/50 p-2 border border-slate-800">
-                <span className="text-[11px] text-slate-400 block">Mode</span>
-                <span className="font-mono text-xs font-bold text-sky-400">Ad-Hoc / IBSS</span>
+                <span className="text-[11px] text-slate-400 block">RF Mode</span>
+                <span className="font-mono text-xs font-bold text-amber-400">IBSS / Pure L2</span>
               </div>
             </div>
           </div>

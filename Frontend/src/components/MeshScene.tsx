@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { OrbitControls, Html, Sphere, Ring } from '@react-three/drei';
+import { OrbitControls, Html, Sphere, Ring, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import type { MeshNode, MeshLink, HopPacket } from '../types/mesh';
 
@@ -160,6 +160,9 @@ export const MeshScene: React.FC<MeshSceneProps> = ({
       <pointLight position={[10, 15, 10]} intensity={1.2} />
       <pointLight position={[-10, -10, -10]} intensity={0.5} color="#10b981" />
       <gridHelper args={[30, 30, '#1e293b', '#0f172a']} position={[0, -2, 0]} />
+
+      {/* Bioluminescent floating spore particles */}
+      <Sparkles count={120} scale={18} size={2.5} speed={0.3} opacity={0.65} color="#34d399" />
 
       <OrbitControls
         makeDefault
