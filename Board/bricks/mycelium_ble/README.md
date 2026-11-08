@@ -49,6 +49,12 @@ physical position or invented intermediate connection is used.
 Reports use the existing 20-byte frame, TTL 4, deduplication and bounded
 relay queue. Visibility is limited to reports that reach the laptop within
 that hop budget; disconnected partitions cannot be displayed as live.
+Queued link/topology updates replace older updates for the same origin and
+neighbor; route-advertisement chunks remain distinct. State frames expire
+after 15 seconds and occupy at most 96 of 128 slots. Message traffic can
+evict queued state frames, but never other messages. SOS and ACK traffic is
+sent before chat/data, then state reports. These limits reduce state-report
+congestion; delivery still depends on working BLE links and finite capacity.
 Expired direct routes stop generating reports and the bridge expires links
 after 20 seconds without a report. Update `ble.py`, `peer.py`, and
 `protocol.py` together on every reporting/relay board, rebuild its Brick

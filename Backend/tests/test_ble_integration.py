@@ -77,6 +77,40 @@ class FakeMeshNode:
 
 
 class BleIntegrationTests(unittest.TestCase):
+    def test_repeated_state_reports_do_not_fill_queue_or_discard_chat(self):
+        from unittest.mock import patch
+        queue = PeerQueue("Node-0000", lambda frame: True)
+        with patch("peer.time.monotonic", return_value=100):
+            for sequence in range(1, 501):
+                queue.accept(pack_packet("Node-0001", "*", ttl=4,
+                    msg_type=protocol.TYPE_TOPOLOGY_REPORT, payload=b"\x00\x02",
+                    message_id=sequence), incoming=True, source="AA")
+            self.assertEqual(len(queue.pending), 1)
+            queue.accept(pack_packet("Node-0000", "Node-0002", msg_type=TYPE_CHAT,
+                                     payload="hello", message_id=900))
+        with patch("peer.time.monotonic", return_value=116):
+            queue.expire()
+        self.assertEqual(len(queue.pending), 1)
+        self.assertEqual(unpack_packet(next(iter(queue.pending.values()))[0])["type_id"], TYPE_CHAT)
+
+    def test_state_traffic_reserves_space_for_messages(self):
+        queue = PeerQueue("Node-0000", lambda frame: True)
+        for index in range(1, 201):
+            queue.accept(pack_packet(f"Node-{index:04X}", "*", ttl=4,
+                msg_type=protocol.TYPE_TOPOLOGY_REPORT, payload=b"\xff\xfe",
+                message_id=index), incoming=True, source="AA")
+        self.assertEqual(len(queue.pending), 96)
+        for index in range(32):
+            queue.accept(pack_packet("Node-0000", "Node-0002", msg_type=TYPE_CHAT,
+                                     payload="hello", message_id=1000 + index))
+        queue.accept(pack_packet("Node-0000", "Node-0002", msg_type=TYPE_SOS,
+                                 message_id=2000))
+        kinds = [unpack_packet(p[0])["type_id"] for p in queue.pending.values()]
+        self.assertEqual(len(kinds), 128)
+        self.assertEqual(kinds.count(TYPE_CHAT), 32)
+        self.assertEqual(kinds.count(TYPE_SOS), 1)
+        self.assertEqual(kinds.count(protocol.TYPE_TOPOLOGY_REPORT), 95)
+
     def test_remote_topology_reaches_laptop_through_relay_without_rssi(self):
         from unittest.mock import patch
         source = PeerQueue("Node-0001", lambda frame: True)

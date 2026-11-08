@@ -24,6 +24,7 @@ from protocol import (
     TYPE_TOPOLOGY_REPORT,
     TYPE_ROUTE_ADVERTISEMENT,
     TYPE_SOS_CLEAR,
+    TYPE_SOS,
     LINK_REPORT_MAX_SAMPLES,
     LINK_REPORT_WINDOW_MS,
     MAX_PENDING_EVENT_REPORTS,
@@ -37,10 +38,14 @@ from protocol import (
     unpack_event_report_fragment,
     unpack_sos_clear_payload,
     unpack_route_advertisement_payload,
+    unpack_link_report_payload,
 )
 
 SOCKET = f"\0mycelium-ble-{getattr(os, 'getuid', os.getpid)()}"
 MAX_PENDING = 128
+MAX_PENDING_STATE = 96
+STATE_FRAME_LIFETIME = 15
+STATE_TYPES = {TYPE_LINK_REPORT, TYPE_TOPOLOGY_REPORT, TYPE_ROUTE_ADVERTISEMENT}
 FRAME_LIFETIME = 120
 MAX_SEEN = 1024
 MAX_LINKS = 4
@@ -204,6 +209,7 @@ class PeerQueue:
     def _queue_event_report_attempt(self, report_id, report):
         fragments = pack_event_report_fragments(report_id, report["record"])
         self.expire()
+        self._evict_state_for(len(fragments))
         if len(self.pending) + len(fragments) > MAX_PENDING:
             return False
 
@@ -653,6 +659,28 @@ class PeerQueue:
             state["reason"] = reason
         self.on_event({"event": "PACKET_STATE", "packet": state})
 
+    @staticmethod
+    def _state_key(packet, send_to):
+        kind = packet["type_id"]
+        payload = packet["raw_payload"]
+        if kind == TYPE_LINK_REPORT:
+            identity = payload[1:3]
+        elif kind == TYPE_TOPOLOGY_REPORT:
+            identity = payload[:2]
+        elif kind == TYPE_ROUTE_ADVERTISEMENT:
+            # Preserve separate chunks of a multi-frame route advertisement.
+            identity = tuple(r["destination_id"] for r in unpack_route_advertisement_payload(payload))
+        else:
+            return None
+        return packet["origin"], kind, identity, send_to.upper() if send_to else None
+
+    def _evict_state_for(self, slots):
+        for key, pending in list(self.pending.items()):
+            if len(self.pending) + slots <= MAX_PENDING:
+                break
+            if unpack_packet(pending[0])["type_id"] in STATE_TYPES:
+                del self.pending[key]
+
     def accept(self, frame, incoming=False, source=None, send_to=None, one_shot=False):
         packet = unpack_packet(frame)
         key = (packet["origin"], packet["message_id"])
@@ -682,7 +710,28 @@ class PeerQueue:
                 self.pending[key][1].add(source.upper())
             return False
         self.expire()
-        if len(self.pending) >= MAX_PENDING:
+        state_key = self._state_key(packet, send_to)
+        if state_key is not None:
+            for old_key, pending in list(self.pending.items()):
+                previous = unpack_packet(pending[0])
+                if self._state_key(previous, pending[3]) == state_key:
+                    older = (
+                        unpack_link_report_payload(packet["raw_payload"])["observed_at"]
+                        < unpack_link_report_payload(previous["raw_payload"])["observed_at"]
+                        if packet["type_id"] == TYPE_LINK_REPORT else
+                        not self._sequence_is_newer(packet["message_id"], previous["message_id"])
+                    )
+                    if older:
+                        return False
+                    del self.pending[old_key]
+            state_entries = [k for k, p in self.pending.items()
+                             if unpack_packet(p[0])["type_id"] in STATE_TYPES]
+            if len(state_entries) >= MAX_PENDING_STATE:
+                del self.pending[state_entries[0]]
+        else:
+            self._evict_state_for(1)
+        # Receiving routing control must not depend on outbound queue space.
+        if len(self.pending) >= MAX_PENDING and not (incoming and packet["type_id"] == TYPE_ROUTE_ADVERTISEMENT):
             if incoming:
                 self.report_packet(packet, "failed", reason="Relay queue is full")
                 return False
@@ -758,7 +807,7 @@ class PeerQueue:
 
         self.pending[key] = (
             frame, {source.upper()} if source else set(),
-            time.monotonic() + FRAME_LIFETIME, send_to.upper() if send_to else None,
+            time.monotonic() + (STATE_FRAME_LIFETIME if state_key is not None else FRAME_LIFETIME), send_to.upper() if send_to else None,
             one_shot,
         )
         if not incoming and packet["type_id"] not in {
@@ -878,7 +927,12 @@ async def run(queue, service, inbox, local_address, local_server=True):
                 stage = "connected"
                 while client.is_connected:
                     queue.expire()
-                    for key, pending in list(queue.pending.items()):
+                    def priority(item):
+                        kind = unpack_packet(item[1][0])["type_id"]
+                        return 0 if kind in {TYPE_SOS, TYPE_ACK, TYPE_EVENT_ACK, TYPE_SOS_CLEAR} else 2 if kind in STATE_TYPES else 1
+                    for key, pending in sorted(list(queue.pending.items()), key=priority):
+                        if queue.pending.get(key) is not pending:
+                            continue
                         frame, sent, _, send_to, one_shot = pending
                         if not client.is_connected:
                             break
