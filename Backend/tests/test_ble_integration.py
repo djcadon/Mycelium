@@ -77,6 +77,46 @@ class FakeMeshNode:
 
 
 class BleIntegrationTests(unittest.TestCase):
+    def test_windows_incoming_write_resolves_session_device_id(self):
+        from Backend.windows_ble_node import WindowsBleMeshNode
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock, patch
+
+        frame = pack_packet(
+            "Node-6EBB", "*", ttl=1, msg_type=TYPE_ROUTE_ADVERTISEMENT,
+            payload=pack_route_advertisement_payload([("Node-6EBB", 0)]),
+            message_id=456,
+        )
+        events = []
+        queue = PeerQueue("Node-0000", lambda value: None, events.append)
+        device = SimpleNamespace(bluetooth_address=0xAABBCCDDEEFF, close=Mock())
+        bluetooth = SimpleNamespace(BluetoothLEDevice=SimpleNamespace(
+            from_id_async=AsyncMock(return_value=device)))
+        reader = SimpleNamespace(
+            unconsumed_buffer_length=len(frame),
+            read_bytes=lambda target: target.__setitem__(slice(None), frame))
+        streams = SimpleNamespace(DataReader=SimpleNamespace(from_buffer=lambda value: reader))
+        request = SimpleNamespace(offset=0, value=object(), respond=Mock(),
+                                  respond_with_protocol_error=Mock())
+        args = SimpleNamespace(
+            get_request_async=AsyncMock(return_value=request),
+            session=SimpleNamespace(device_id=SimpleNamespace(id="peer-device-id")))
+        deferral = SimpleNamespace(complete=Mock())
+        node = SimpleNamespace(protocol=protocol, queue=queue,
+                               _format_address=WindowsBleMeshNode._format_address)
+        with patch.dict(sys.modules, {
+            "winrt.windows.devices.bluetooth": bluetooth,
+            "winrt.windows.storage.streams": streams,
+        }):
+            asyncio.run(WindowsBleMeshNode._handle_write(node, args, deferral))
+        bluetooth.BluetoothLEDevice.from_id_async.assert_awaited_once_with("peer-device-id")
+        self.assertEqual(queue.peer_ids["AA:BB:CC:DD:EE:FF"], "Node-6EBB")
+        self.assertTrue(any(event["event"] == "ROUTE_TABLE" for event in events))
+        request.respond.assert_called_once()
+        request.respond_with_protocol_error.assert_not_called()
+        device.close.assert_called_once()
+        deferral.complete.assert_called_once()
+
     def test_route_advertisement_makes_bb_visible_without_scan_link_event(self):
         events = []
         queue = PeerQueue("Node-0000", lambda frame: None, events.append)

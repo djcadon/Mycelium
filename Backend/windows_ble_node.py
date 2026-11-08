@@ -217,6 +217,9 @@ class WindowsBleMeshNode:
         request = None
         try:
             request = await args.get_request_async()
+            if request is None:
+                LOG.warning("BLE write request expired before it could be read")
+                return
             if request.offset != 0:
                 request.respond_with_protocol_error(0x07)
                 return
@@ -230,8 +233,17 @@ class WindowsBleMeshNode:
                 request.respond_with_protocol_error(0x0D)
                 return
 
-            source = self._format_address(args.session.device.bluetooth_address)
+            from winrt.windows.devices.bluetooth import BluetoothLEDevice
+
+            device = await BluetoothLEDevice.from_id_async(args.session.device_id.id)
+            if device is None:
+                raise RuntimeError("Could not resolve the incoming BLE peer address")
+            try:
+                source = self._format_address(device.bluetooth_address)
+            finally:
+                device.close()
             self.queue.accept(bytes(value), incoming=True, source=source)
+            LOG.info("Received BLE frame from %s (%d bytes)", source, len(value))
             request.respond()
         except (OSError, RuntimeError, ValueError) as error:
             LOG.warning("Rejected BLE write to laptop mesh node: %s", error)
