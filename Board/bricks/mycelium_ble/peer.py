@@ -706,9 +706,16 @@ class PeerQueue:
     def accept(self, frame, incoming=False, source=None, send_to=None, one_shot=False):
         packet = unpack_packet(frame)
         key = (packet["origin"], packet["message_id"])
+        if packet["type_id"] in {TYPE_CHAT, TYPE_ACK}:
+            LOG.info("MESH_%s node=%s type=%s id=%s:%08X target=%s source=%s ttl=%s hops=%s queue=%d",
+                     "RX" if incoming else "LOCAL", self.node_id, packet["type"],
+                     packet["origin"], packet["message_id"], packet["target"], source,
+                     packet["ttl"], packet["hop_count"], len(self.pending))
         if incoming and packet["type_id"] == TYPE_ROUTE_ADVERTISEMENT:
             self._check_direct_peer_identity(packet, source)
         if incoming and source and source.upper() in self.quarantined_neighbors:
+            LOG.warning("MESH_DROP node=%s origin=%s id=%08X reason=quarantined-source",
+                        self.node_id, packet["origin"], packet["message_id"])
             return False
         if incoming and packet["origin"] == "*":
             LOG.warning("Ignoring packet using the broadcast ID as an origin")
@@ -728,6 +735,9 @@ class PeerQueue:
                 LOG.error("Ignoring packet from a peer using this node's ID %s", self.node_id)
             return False
         if key in self.seen:
+            if packet["type_id"] in {TYPE_CHAT, TYPE_ACK}:
+                LOG.info("MESH_DROP node=%s origin=%s id=%08X reason=duplicate",
+                         self.node_id, packet["origin"], packet["message_id"])
             if source and key in self.pending:
                 self.pending[key][1].add(source.upper())
             return False
@@ -817,6 +827,10 @@ class PeerQueue:
                     )
                     self.accept(ack)
             if packet["target"] == self.node_id or packet["ttl"] <= 1:
+                if packet["type_id"] in {TYPE_CHAT, TYPE_ACK}:
+                    LOG.info("MESH_%s node=%s origin=%s id=%08X target=%s",
+                             "DELIVERED" if packet["target"] == self.node_id else "TTL_EXPIRED",
+                             self.node_id, packet["origin"], packet["message_id"], packet["target"])
                 return True
             frame = pack_packet(
                 packet["origin"], packet["target"], packet["ttl"] - 1,
@@ -840,6 +854,10 @@ class PeerQueue:
             time.monotonic() + (STATE_FRAME_LIFETIME if state_key is not None else FRAME_LIFETIME), send_to.upper() if send_to else None,
             one_shot,
         )
+        if packet["type_id"] in {TYPE_CHAT, TYPE_ACK}:
+            LOG.info("MESH_QUEUED node=%s origin=%s id=%08X target=%s next_hop=%s",
+                     self.node_id, packet["origin"], packet["message_id"], packet["target"],
+                     self.next_hop_for(packet["target"], excluded={source} if source else ()))
         if not incoming and packet["type_id"] not in {
             TYPE_LINK_REPORT,
             TYPE_ROUTE_ADVERTISEMENT,
@@ -985,7 +1003,12 @@ async def run(queue, service, inbox, local_address, local_server=True):
                         sent.add(address)
                         if one_shot:
                             queue.pending.pop(key, None)
-                        LOG.info("GATT write confirmed by %s", address)
+                        transmitted = unpack_packet(frame)
+                        LOG.log(logging.INFO if transmitted["type_id"] in {TYPE_CHAT, TYPE_ACK} else logging.DEBUG,
+                                 "GATT write confirmed by %s type=%s origin=%s id=%08X target=%s ttl=%s hops=%s",
+                                 address, transmitted["type"], transmitted["origin"],
+                                 transmitted["message_id"], transmitted["target"],
+                                 transmitted["ttl"], transmitted["hop_count"])
                         stage = "connected"
                     await asyncio.sleep(0.15)
                 LOG.debug("GATT connection to %s ended", address)
