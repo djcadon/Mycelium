@@ -283,6 +283,14 @@ export function useMeshBridge(): MeshBridgeState {
         }
         return currentNodes;
       });
+
+      // Purge packets older than 10 seconds
+      setPackets((currentPackets) =>
+        currentPackets.filter((packet) => {
+          const timestamp = packet.payload?.timestamp;
+          return !timestamp || now - timestamp < 10000;
+        }),
+      );
     }, 2000);
 
     return () => clearInterval(sweepTimer);

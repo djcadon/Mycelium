@@ -321,7 +321,7 @@ export function NetworkMap({
   );
 
   return (
-    <div className="relative h-[clamp(520px,68vh,900px)] min-h-[500px] mx-2 md:mx-3.5 overflow-hidden border border-[#e5e0d2] bg-[#f6f4eb] bg-[radial-gradient(#c4beae_1px,transparent_1px)] [background-size:24px_24px]" role="group" aria-label="Top-down positional mesh map">
+    <div className="relative isolate z-0 h-[clamp(520px,68vh,900px)] min-h-[500px] mx-2 md:mx-3.5 overflow-hidden border border-[#e5e0d2] bg-[#f6f4eb] bg-[radial-gradient(#c4beae_1px,transparent_1px)] [background-size:24px_24px]" role="group" aria-label="Top-down positional mesh map">
       <Canvas
         className="block w-full h-full"
         orthographic

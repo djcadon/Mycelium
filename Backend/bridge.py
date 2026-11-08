@@ -130,7 +130,8 @@ class BleUiBridge:
             target_node["hardware"] = (
                 "Laptop BLE Bridge" if target == self.local_node_id else "Arduino UNO Q"
             )
-            source_node["status"] = target_node["status"] = "online"
+            if active:
+                source_node["status"] = target_node["status"] = "online"
             link_id = f"{source}->{target}"
             existing_link = self.links.get(link_id)
             if existing_link and occurred_at < existing_link.get("observedAt", 0):

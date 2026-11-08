@@ -432,9 +432,10 @@ class PeerQueue:
         previous_id = self.peer_ids.get(source)
         if previous_id and previous_id != advertiser:
             self.neighbor_routes.pop(source, None)
-        self.peer_ids[source] = advertiser
-        neighbor_routes = self.neighbor_routes.setdefault(source, {})
         now = time.monotonic()
+        self.peer_ids[source] = advertiser
+        self.observe_direct_neighbor(source, advertiser, now)
+        neighbor_routes = self.neighbor_routes.setdefault(source, {})
         changed = False
         for advertised in advertised_routes:
             destination = advertised["destination_id"]
@@ -762,6 +763,14 @@ class PeerQueue:
         if len(self.seen) > MAX_SEEN:
             self.seen.popitem(last=False)
 
+        if incoming and source and packet["hop_count"] == 0 and packet["origin"] != self.node_id and packet["origin"] != "*":
+            source_addr = source.upper()
+            origin = packet["origin"]
+            if source_addr not in self.quarantined_neighbors and origin not in self.colliding_node_ids:
+                if self.peer_ids.get(source_addr) != origin:
+                    self.peer_ids[source_addr] = origin
+                    self.observe_direct_neighbor(source_addr, origin)
+
         if incoming and packet["type_id"] == TYPE_ROUTE_ADVERTISEMENT:
             self._accept_route_advertisement(packet, source)
             return True
@@ -886,6 +895,7 @@ async def run(queue, service, inbox, local_address, local_server=True):
     links = {}
     neighbors = {}
     retry_at = {}
+    consecutive_failures = {}
     last_link_event = {}
 
     def discovered(device, advertisement):
@@ -894,10 +904,6 @@ async def run(queue, service, inbox, local_address, local_server=True):
             now = time.monotonic()
             neighbors[address] = (device, now)
             peer_node_id = queue.peer_ids.get(address)
-            if not peer_node_id:
-                clean_mac = address.replace(":", "").replace("-", "").upper()
-                if len(clean_mac) >= 4:
-                    peer_node_id = f"Node-{clean_mac[-4:]}"
             if peer_node_id:
                 queue.observe_direct_neighbor(address, peer_node_id, now)
             if peer_node_id and now - last_link_event.get(address, 0) >= LINK_REPORT_INTERVAL:
@@ -1026,15 +1032,24 @@ async def run(queue, service, inbox, local_address, local_server=True):
                             for address, task in list(links.items()):
                                 if task.done():
                                     del links[address]
-                                    retry_at[address] = now + random.uniform(3, 5)
+                                    failed = False
                                     try:
                                         task.result()
                                     except Exception as error:
+                                        failed = True
                                         LOG.warning("BLE link task for %s completed with error: %s", address, error)
+                                    if failed:
+                                        consecutive_failures[address] = consecutive_failures.get(address, 0) + 1
+                                        backoff = min(60.0, 4.0 * (1.8 ** min(consecutive_failures[address], 6))) + random.uniform(1.0, 3.0)
+                                        retry_at[address] = now + backoff
+                                    else:
+                                        consecutive_failures.pop(address, None)
+                                        retry_at[address] = now + random.uniform(1.0, 3.0)
                             for address, (device, seen_at) in list(neighbors.items()):
                                 if now - seen_at > 25 and address not in links:
                                     neighbors.pop(address)
                                     retry_at.pop(address, None)
+                                    consecutive_failures.pop(address, None)
                                     last_link_event.pop(address, None)
                                     continue
                                 if len(links) < MAX_LINKS and address not in links and now >= retry_at.get(address, 0):

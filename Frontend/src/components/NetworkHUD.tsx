@@ -212,7 +212,7 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
 
       {/* Main Workspace */}
       <main className="relative pt-4">
-        <section className="relative w-full overflow-hidden border border-line bg-paper shadow-sm rounded-none md:rounded" aria-labelledby="map-title">
+        <section className="relative isolate z-0 w-full overflow-hidden border border-line bg-paper shadow-sm rounded-none md:rounded" aria-labelledby="map-title">
           {/* Top-Left Floating Canvas Telemetry HUD */}
           <div className="absolute top-4 left-4 z-20 pointer-events-none flex flex-col gap-2">
             <div className="pointer-events-auto bg-[#faf8f0]/90 backdrop-blur-md border border-line rounded-lg px-5 py-3.5 shadow-md flex flex-col gap-3">
