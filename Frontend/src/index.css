@@ -281,6 +281,7 @@
 
 .map-stage {
   position: relative;
+  height: clamp(560px, 72vh, 960px);
   min-height: 560px;
   margin: 0 14px;
   overflow: hidden;
@@ -295,7 +296,7 @@
 .network-map {
   display: block;
   width: 100%;
-  height: clamp(560px, 72vh, 960px);
+  height: 100%;
 }
 
 .scene-node-label {
@@ -784,12 +785,8 @@
     padding-top: 18px;
   }
 
-  .network-map {
-    height: min(62vh, 520px);
-    min-height: 330px;
-  }
-
   .map-stage {
+    height: clamp(330px, 62vh, 520px);
     min-height: 330px;
     margin: 0 8px;
   }

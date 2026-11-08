@@ -175,7 +175,7 @@ export const MeshScene: React.FC<MeshSceneProps> = ({
       />
 
       {nodes.length > 0 && (
-        <Bounds key={layoutKey} fit margin={1.12}>
+        <Bounds key={layoutKey} fit observe margin={1.12}>
           <group>
             {links.map((link) => (
               <LinkLine
