@@ -7,7 +7,7 @@ import socket
 import sys
 from collections import OrderedDict
 
-from protocol import TOTAL_SIZE, pack_packet, unpack_packet
+from protocol import TOTAL_SIZE, TYPE_ECHO_REPLY, TYPE_ECHO_REQUEST, pack_packet, unpack_packet
 
 SOCKET = f"\0mycelium-ble-{os.getuid()}"
 MAX_PENDING = 128
@@ -35,6 +35,11 @@ class PeerQueue:
             if packet["origin"] == self.node_id:
                 return
             self.on_receive(frame)
+            if packet["target"] == self.node_id and packet["type_id"] == TYPE_ECHO_REQUEST:
+                self.accept(pack_packet(
+                    self.node_id, packet["origin"], msg_type=TYPE_ECHO_REPLY,
+                    payload=packet["raw_payload"],
+                ))
             if packet["target"] == self.node_id or packet["ttl"] <= 1:
                 return
             frame = pack_packet(

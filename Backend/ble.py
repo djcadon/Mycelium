@@ -19,6 +19,7 @@ try:
         TYPE_SOS,
         TYPE_TELEMETRY,
         TYPE_CHAT,
+        TYPE_ECHO_REQUEST,
         TOTAL_SIZE,
     )
 except ImportError:
@@ -444,6 +445,19 @@ def main(args=None):
 
     if not args or args == ["listen"]:
         payload = None
+    elif args[:1] == ["echo"] and len(args) == 2 and peer is None:
+        if sys.implementation.name != "cpython" or sys.platform != "linux":
+            raise SystemExit("Echo requires Linux peer mode on both nodes")
+        target = args[1].upper()
+        if (len(target) != 9 or not target.startswith("NODE-")
+                or any(char not in "0123456789ABCDEF" for char in target[5:])
+                or target in (MY_NODE_ID.upper(), "NODE-FFFF")):
+            raise SystemExit("Echo requires another peer's Node-XXXX ID")
+        request_id = os.urandom(6).hex()
+        payload = pack_packet(
+            MY_NODE_ID, target, msg_type=TYPE_ECHO_REQUEST, payload=request_id,
+        )
+        print(f"Echo request {request_id} -> {target}; check the local peer log for ECHO_REPLY")
     elif args == ["ping"]:
         # Pack a structured 20-byte Heartbeat
         payload = pack_packet(origin=MY_NODE_ID, target="*", ttl=1, hop_count=0, msg_type=TYPE_HEARTBEAT, payload="PING")
@@ -469,6 +483,7 @@ def main(args=None):
         print("  python3 ble.py send <message> (Broadcast)")
         print("  python3 ble.py sos")
         print("  python3 ble.py ping")
+        print("  python3 ble.py echo Node-XXXX")
         return
 
     if sys.implementation.name == "micropython":
@@ -482,6 +497,8 @@ def main(args=None):
                 if await enqueue(payload):
                     print("Queued on local Mycelium peer")
                     return
+            if args[:1] == ["echo"]:
+                raise SystemExit("Start the local peer with ble.py run before sending an echo")
             await linux_main(payload, peer)
 
         asyncio.run(dispatch())
