@@ -77,6 +77,39 @@ class FakeMeshNode:
 
 
 class BleIntegrationTests(unittest.TestCase):
+    def test_route_advertisement_makes_bb_visible_without_scan_link_event(self):
+        events = []
+        queue = PeerQueue("Node-0000", lambda frame: None, events.append)
+        frame = pack_packet(
+            "Node-6EBB", "*", ttl=1,
+            msg_type=TYPE_ROUTE_ADVERTISEMENT,
+            payload=pack_route_advertisement_payload([("Node-6EBB", 0)]),
+            message_id=123,
+        )
+        queue.accept(frame, incoming=True, source="AA:BB:CC:DD:EE:FF")
+        bridge = RecordingBridge()
+        bridge.local_node_id = "Node-0000"
+        for event in events:
+            asyncio.run(bridge.handle_device_event(event))
+        self.assertEqual(bridge.nodes["Node-6EBB"]["status"], "online")
+        self.assertFalse(bridge.links)  # A route does not establish a measured link.
+        self.assertTrue(all(isinstance(r["updatedAt"], int) for r in bridge.routes))
+        self.assertTrue(any(e["type"] == "TOPOLOGY_UPDATE" for e in bridge.events))
+        events.clear()
+        queue.last_route_report -= 6
+        queue.expire_routes()
+        self.assertTrue(any(e["event"] == "ROUTE_TABLE" for e in events))
+
+    def test_windows_write_deferral_is_acquired_before_scheduling(self):
+        from Backend.windows_ble_node import WindowsBleMeshNode
+        from types import SimpleNamespace
+        calls = []
+        args = SimpleNamespace(get_deferral=lambda: calls.append("deferral"))
+        node = SimpleNamespace(loop=SimpleNamespace(
+            call_soon_threadsafe=lambda callback: calls.append("scheduled")))
+        WindowsBleMeshNode._on_write_requested(node, None, args)
+        self.assertEqual(calls, ["deferral", "scheduled"])
+
     def test_brick_entrypoint_uses_local_modules(self):
         self.assertEqual(Path(ble.__file__).resolve().parent, BRICK_DIR.resolve())
         self.assertEqual(ble.SERVICE, "9cd10001-8ed5-4e55-932e-5c558747527a")

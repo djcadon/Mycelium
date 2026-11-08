@@ -173,14 +173,18 @@ class BleUiBridge:
             if not isinstance(routes, list):
                 LOG.warning("Ignoring route table with invalid routes")
                 return
-            self.routes = routes
+            self.routes = [{**route, "updatedAt": occurred_at} for route in routes]
+            for route in self.routes:
+                if route.get("status") == "reachable":
+                    self._upsert_node(route["destination"], occurred_at)
             self.route_last_seen = time.monotonic()
             await self.broadcast({
                 "type": "ROUTE_UPDATE",
                 "gatewayNodeId": self.local_node_id,
-                "routes": routes,
+                "routes": self.routes,
                 "occurredAt": occurred_at,
             })
+            await self.publish_topology()
             return
 
         if event_type in {"SEND_ACCEPTED", "SEND_REJECTED"}:

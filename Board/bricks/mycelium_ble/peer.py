@@ -101,6 +101,7 @@ class PeerQueue:
         self.pending_event_reports = OrderedDict()
         self.seen = OrderedDict()
         self.peer_ids = {}
+        self.last_route_report = float("-inf")
         self.neighbor_routes = {}
         self.colliding_node_ids = set()
         self.quarantined_neighbors = set()
@@ -471,7 +472,8 @@ class PeerQueue:
             for destination, route in routes.items()
         }
         self.routes = routes
-        if changed:
+        if changed or now - self.last_route_report >= ROUTE_ADVERTISEMENT_INTERVAL:
+            self.last_route_report = now
             self.on_event({"event": "ROUTE_TABLE", "routes": self.export_routes()})
 
     def expire_routes(self):

@@ -204,12 +204,16 @@ class WindowsBleMeshNode:
         self.is_advertising = True
 
     def _on_write_requested(self, _sender, args):
-        self.loop.call_soon_threadsafe(
-            lambda: asyncio.create_task(self._handle_write(args))
-        )
-
-    async def _handle_write(self, args):
         deferral = args.get_deferral()
+        try:
+            self.loop.call_soon_threadsafe(
+                lambda: asyncio.create_task(self._handle_write(args, deferral))
+            )
+        except RuntimeError:
+            deferral.complete()
+            raise
+
+    async def _handle_write(self, args, deferral):
         request = None
         try:
             request = await args.get_request_async()
