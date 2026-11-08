@@ -4,6 +4,8 @@ import argparse
 import asyncio
 import ipaddress
 import json
+import math
+import re
 import socket
 import time
 import uuid
@@ -32,6 +34,9 @@ HOST_NODE_ID = "Laptop-Base"
 ONLINE_TIMEOUT_SECONDS = 8.0
 ACK_TIMEOUT_SECONDS = 8.0
 MAX_MESSAGE_HISTORY = 100
+MESH_LINK_TIMEOUT_SECONDS = 15.0
+MAX_MESH_REPORT_IDS = 4096
+MESH_NODE_ID_PATTERN = re.compile(r"Node-[0-9A-Fa-f]{4}\Z")
 
 
 def ipv4_address(value: str) -> str:

@@ -27,7 +27,20 @@ export interface MeshLink {
   source: string;
   target: string;
   rssi?: number; // dBm when measured; omitted for IP-only links
+  rssiMedian?: number;
+  rssiMad?: number;
+  sampleCount?: number;
+  measurementWindowMs?: number;
+  observedAt?: number;
   active: boolean;
+}
+
+export interface MeshRoute {
+  destination: string;
+  nextHop: string | null;
+  hopCount: number;
+  status: 'local' | 'reachable';
+  updatedAt: number;
 }
 
 export interface HopPacket {

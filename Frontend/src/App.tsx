@@ -6,9 +6,11 @@ export function App() {
   const {
     nodes,
     links,
+    routes,
     packets,
     alerts,
     messages,
+    maxPayloadBytes,
     connectionStatus,
     lastEventAt,
     error,
@@ -26,9 +28,11 @@ export function App() {
       <NetworkHUD
         nodes={nodes}
         links={links}
+        routes={routes}
         packets={packets}
         alerts={alerts}
         messages={messages}
+        maxPayloadBytes={maxPayloadBytes}
         connectionStatus={connectionStatus}
         lastEventAt={lastEventAt}
         error={error}

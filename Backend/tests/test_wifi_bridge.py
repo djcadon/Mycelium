@@ -3,6 +3,11 @@ import json
 import time
 import unittest
 from typing import Any
+from pathlib import Path
+import sys
+
+WIFI_DIR = Path(__file__).resolve().parents[1] / "WiFi"
+sys.path.insert(0, str(WIFI_DIR))
 
 from bridge import BridgeDatagramProtocol, Peer, WiFiBridge
 from node import process_datagram

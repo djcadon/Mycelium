@@ -8,4 +8,6 @@ services:
     environment:
       DBUS_SYSTEM_BUS_ADDRESS: unix:path=/run/dbus/system_bus_socket
       MYCELIUM_MATRIX_FILE: /matrix/.mycelium-matrix.json
-      MYCELIUM_NODE_ID: Node-6EBA
+      MYCELIUM_NODE_ID: ${MYCELIUM_NODE_ID:-}
+      MYCELIUM_GATEWAY_NODE_ID: ${MYCELIUM_GATEWAY_NODE_ID:-}
+      MYCELIUM_LOG_LEVEL: INFO

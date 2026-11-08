@@ -5,18 +5,20 @@ import type {
   MeshNode,
   MeshLink,
   HopPacket,
+  MeshRoute,
   OutboundMessage,
 } from '../types/mesh';
 import type { BridgeConnectionStatus } from '../hooks/useMeshBridge';
-import { MAX_PAYLOAD_BYTES } from '../services/bridgeProtocol';
 import { NetworkMap } from './NetworkMap';
 
 interface NetworkHUDProps {
   nodes: MeshNode[];
   links: MeshLink[];
+  routes: MeshRoute[];
   packets: HopPacket[];
   alerts: MeshAlert[];
   messages: OutboundMessage[];
+  maxPayloadBytes: number;
   connectionStatus: BridgeConnectionStatus;
   lastEventAt: number | null;
   error: string | null;
@@ -53,9 +55,11 @@ function messageStateLabel(status: OutboundMessage['status']): string {
 export const NetworkHUD: React.FC<NetworkHUDProps> = ({
   nodes,
   links,
+  routes,
   packets,
   alerts,
   messages,
+  maxPayloadBytes,
   connectionStatus,
   lastEventAt,
   error,
@@ -83,10 +87,14 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
           (link.source === selectedNode.id || link.target === selectedNode.id),
       )
     : [];
-  const reportedRssi = selectedLinks
-    .map((link) => link.rssi)
-    .filter((rssi): rssi is number => typeof rssi === 'number');
-  const strongestRssi = reportedRssi.length ? Math.max(...reportedRssi) : null;
+  const strongestLink = selectedLinks.reduce<MeshLink | null>((strongest, link) => {
+    const level = link.rssiMedian ?? link.rssi;
+    const strongestLevel = strongest?.rssiMedian ?? strongest?.rssi;
+    return level !== undefined && (strongestLevel === undefined || level > strongestLevel)
+      ? link
+      : strongest;
+  }, null);
+  const strongestRssi = strongestLink?.rssiMedian ?? strongestLink?.rssi ?? null;
   const payloadBytes = new TextEncoder().encode(draft).length;
   const recentMessages = [...messages].slice(-5).reverse();
   const recentAlerts = [...alerts].slice(-5).reverse();
@@ -233,7 +241,15 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
                   <div><dt>State</dt><dd>{selectedNode.status}</dd></div>
                   <div><dt>Hardware</dt><dd>{selectedNode.hardware}</dd></div>
                   <div><dt>Direct links</dt><dd>{selectedNode.neighborCount ?? '—'}</dd></div>
-                  <div><dt>Strongest RSSI</dt><dd>{strongestRssi === null ? '—' : `${strongestRssi} dBm`}</dd></div>
+                  <div><dt>Strongest RSSI (30s median)</dt><dd>{strongestRssi === null ? '—' : `${strongestRssi} dBm`}</dd></div>
+                  <div>
+                    <dt>RSSI samples / MAD</dt>
+                    <dd>
+                      {strongestLink?.sampleCount
+                        ? `${strongestLink.sampleCount} / ${strongestLink.rssiMad === undefined ? 'warming up' : `${strongestLink.rssiMad.toFixed(1)} dB`}`
+                        : '—'}
+                    </dd>
+                  </div>
                   <div><dt>Last seen</dt><dd>{timeSince(selectedNode.lastSeen)}</dd></div>
                   <div>
                     <dt>Position</dt>
@@ -253,6 +269,34 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
             )}
           </section>
 
+          <section className="rail-section event-section">
+            <div className="rail-heading">
+              <span className="eyebrow">Gateway route table</span>
+              <span className="peer-count">{routes.filter((route) => route.status === 'reachable').length.toString().padStart(2, '0')}</span>
+            </div>
+            {routes.some((route) => route.status === 'reachable') ? (
+              <>
+                <ul className="event-list">
+                  {routes
+                    .filter((route) => route.status === 'reachable')
+                    .sort((left, right) => left.destination.localeCompare(right.destination))
+                    .map((route) => (
+                      <li key={route.destination}>
+                        <div className="event-list-heading">
+                          <strong>{route.destination}</strong>
+                          <span>{route.hopCount} {route.hopCount === 1 ? 'hop' : 'hops'}</span>
+                        </div>
+                        <span>Next hop: {route.nextHop}</span>
+                      </li>
+                    ))}
+                </ul>
+                <p className="section-copy">Hop count is routing cost, not physical distance.</p>
+              </>
+            ) : (
+              <p className="empty-selection">Waiting for distributed route advertisements.</p>
+            )}
+          </section>
+
           <section className="rail-section actions-section">
             <span className="eyebrow">Send to selected peer</span>
             <p className="section-copy">
@@ -265,15 +309,15 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 rows={3}
-                maxLength={MAX_PAYLOAD_BYTES}
+                maxLength={maxPayloadBytes}
               />
-              <div className={`payload-count${payloadBytes > MAX_PAYLOAD_BYTES ? ' is-over-limit' : ''}`}>
-                {payloadBytes} / {MAX_PAYLOAD_BYTES} bytes
+              <div className={`payload-count${payloadBytes > maxPayloadBytes ? ' is-over-limit' : ''}`}>
+                {payloadBytes} / {maxPayloadBytes} bytes
               </div>
               <button
                 className="action-button"
                 type="submit"
-                disabled={!canSend || payloadBytes === 0 || payloadBytes > MAX_PAYLOAD_BYTES}
+                disabled={!canSend || payloadBytes === 0 || payloadBytes > maxPayloadBytes}
               >
                 <Send size={16} />
                 <span>Send message</span>

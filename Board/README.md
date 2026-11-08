@@ -6,6 +6,11 @@ MYCELIUM_NODE_ID per board (for example Node-8101, Node-6EBB, Node-0003).
 Set the /matrix volume source to that board's actual App Lab app python folder.
 Rebuild the Brick and run the app on each board.
 
+The UNO Q BLE runtime source of truth is
+`Board/bricks/mycelium_ble/{ble.py,peer.py,protocol.py}`. The Dockerfile copies
+those modules into the Brick image. The Arduino source is not duplicated under
+`Backend/`; that directory contains the desktop bridge and Wi-Fi experiment.
+
 The peers advertise the same mesh service and automatically discover neighbors.
 Each peer opens and keeps its outbound GATT links. Both directions use GATT
 writes on outbound sessions. No peer address needs to be configured.

@@ -10,6 +10,11 @@ import time
 import os
 
 try:
+    import logging
+except ImportError:
+    logging = None
+
+try:
     from protocol import (
         pack_packet,
         unpack_packet,
@@ -19,8 +24,25 @@ try:
         TYPE_SOS,
         TYPE_TELEMETRY,
         TYPE_CHAT,
+        TYPE_ACK,
+        TYPE_LINK_REPORT,
+        TYPE_ROUTE_ADVERTISEMENT,
+        TYPE_EVENT_REPORT,
+        TYPE_EVENT_ACK,
+        TYPE_SOS_CLEAR,
+        TYPE_NAMES,
+        BROADCAST_ID,
+        EVENT_PACKET_RX,
+        EVENT_PACKET_STATE,
+        pack_sos_clear_payload,
         TOTAL_SIZE,
         MAX_PAYLOAD,
+        unpack_link_report_payload,
+        unpack_event_report_fragment,
+        EventReportReassembler,
+        unpack_mesh_event_record,
+        pack_mesh_event_record,
+        unpack_sos_clear_payload,
     )
 except ImportError:
     # Minimal fallback for MicroPython
@@ -29,11 +51,25 @@ except ImportError:
     TYPE_HEARTBEAT = 0x01
     TYPE_SOS = 0x02
     TYPE_CHAT = 0x04
+    TYPE_ACK = 0x05
+    TYPE_LINK_REPORT = 0x06
+    TYPE_ROUTE_ADVERTISEMENT = 0x07
+    TYPE_EVENT_REPORT = 0x08
+    TYPE_EVENT_ACK = 0x09
+    TYPE_SOS_CLEAR = 0x0A
+    BROADCAST_ID = 0xFFFF
+
+    def pack_sos_clear_payload(alert_message_id):
+        if not isinstance(alert_message_id, int) or not 0 <= alert_message_id <= 0xFFFFFFFF:
+            raise ValueError("SOS alert message ID must be an unsigned 32-bit integer")
+        return alert_message_id.to_bytes(4, "big") + b"\x00" * 5
 
 NAME = "Mycelium"
 SERVICE = "9cd10001-8ed5-4e55-932e-5c558747527a"
 INBOX = "9cd10002-8ed5-4e55-932e-5c558747527a"
 MAX_BYTES = 20
+BRIDGE_REPORTER = None
+EVENT_REPORT_REASSEMBLER = None
 
 def get_local_node_id() -> str:
     """Derives a stable Node ID from hardware MAC address."""
@@ -51,21 +87,46 @@ def get_local_node_id() -> str:
     except Exception:
         return "Node-0001"
 
-MY_NODE_ID = os.getenv("MYCELIUM_NODE_ID") or get_local_node_id()
+_configured_node_id = os.getenv("MYCELIUM_NODE_ID") or get_local_node_id()
+if (
+    not isinstance(_configured_node_id, str)
+    or len(_configured_node_id) != 9
+    or _configured_node_id[:5].lower() != "node-"
+    or any(character not in "0123456789abcdefABCDEF" for character in _configured_node_id[5:])
+):
+    raise ValueError("MYCELIUM_NODE_ID must have the form Node-XXXX")
+try:
+    _configured_node_value = int(_configured_node_id[5:], 16)
+    if _configured_node_value == BROADCAST_ID:
+        raise ValueError("Node-FFFF is reserved for broadcast")
+    MY_NODE_ID = f"Node-{_configured_node_value:04X}"
+except ValueError as error:
+    raise ValueError(f"Invalid MYCELIUM_NODE_ID: {error}") from error
 
 # Set of recently seen packet signatures to prevent routing loops
 SEEN_PACKETS = set()
 
-def emit_event(event_dict: dict):
-    """Emits structured JSON over stdout for the 3D bridge on USB (COM4)."""
-    try:
-        print(json.dumps(event_dict), flush=True)
-    except Exception:
-        pass
 
-def process_received_frame(raw_data: bytes, forward_callback=None, deduplicate=True):
+def _log(level, message, *args):
+    if logging is None:
+        print(message % args if args else message)
+        return
+    getattr(logging.getLogger(__name__), level)(message, *args)
+
+
+def emit_event(event_dict: dict):
+    """Logs structured mesh events at DEBUG."""
+    event_dict.setdefault("occurredAt", int(time.time() * 1000))
+    _log(
+        "debug",
+        "BLE event: %s",
+        json.dumps(event_dict, separators=(",", ":"), ensure_ascii=False),
+    )
+
+def process_received_frame(raw_data: bytes, forward_callback=None, deduplicate=True, event_callback=None):
     """Decodes a 20-byte BLE mesh frame and decides whether to consume or relay it."""
     data_bytes = bytes(raw_data)
+    emit = event_callback or emit_event
 
     # 1. Try unpacking as a Mycelium 20-byte mesh protocol frame
     if len(data_bytes) == TOTAL_SIZE:
@@ -90,52 +151,116 @@ def process_received_frame(raw_data: bytes, forward_callback=None, deduplicate=T
             if origin == MY_NODE_ID:
                 return
 
-            print(f"\n[BLE MESH INBOX]")
-            print(f"  Origin   : {origin}")
-            print(f"  Target   : {target}")
-            print(f"  Hop Count: {hops} (TTL: {ttl})")
-            print(f"  Type     : {p_type}")
-            print(f"  Message  : {msg}")
+            if pkt["type_id"] == TYPE_LINK_REPORT:
+                try:
+                    report = unpack_link_report_payload(pkt["raw_payload"])
+                except ValueError as error:
+                    _log("warning", "Invalid BLE link report: %r", error)
+                    return
+                observed_at = report["observed_at"] * 1000
+                link_event = {
+                    "event": "LINK_UPDATE",
+                    "source": origin,
+                    "target": report["neighbor_id"],
+                    "active": True,
+                    "rssi": report["rssi"],
+                    "reportId": f'{origin}:{pkt["message_id"]:08X}',
+                    "observedAt": observed_at,
+                    "sampleCount": report["sample_count"],
+                }
+                if "measurement_window_ms" in report:
+                    link_event["rssiMedian"] = report["rssi"]
+                    link_event["measurementWindowMs"] = report["measurement_window_ms"]
+                    if report["rssi_mad"] is not None:
+                        link_event["rssiMad"] = report["rssi_mad"]
+                emit(link_event)
+                return
+            if pkt["type_id"] == TYPE_ROUTE_ADVERTISEMENT:
+                return
+            if pkt["type_id"] in (TYPE_EVENT_ACK,):
+                return
+            if pkt["type_id"] == TYPE_EVENT_REPORT:
+                if target != MY_NODE_ID or BRIDGE_REPORTER is None or EVENT_REPORT_REASSEMBLER is None:
+                    return False
+                try:
+                    report_id, event, complete = EVENT_REPORT_REASSEMBLER.add(
+                        origin, pkt["raw_payload"]
+                    )
+                except ValueError as error:
+                    _log("warning", "Invalid mesh event report: %r", error)
+                    return False
+                if not complete:
+                    return False
+                if event is not None:
+                    try:
+                        BRIDGE_REPORTER.send_mesh_event(event, origin)
+                    except OSError as error:
+                        EVENT_REPORT_REASSEMBLER.forget_completed(origin, report_id)
+                        _log("warning", "Could not deliver mesh event to local bridge: %r", error)
+                        return False
+                return True
+            related_message_id = 0
+            if pkt["type_id"] == TYPE_SOS_CLEAR:
+                try:
+                    related_message_id = unpack_sos_clear_payload(pkt["raw_payload"])
+                except ValueError as error:
+                    _log("warning", "Invalid SOS clear packet: %r", error)
+                    return False
 
-            # Pipe to 3D visualizer
-            emit_event({
+            _log(
+                "info",
+                "BLE packet received origin=%s target=%s hops=%d ttl=%d type=%s message=%s",
+                origin,
+                target,
+                hops,
+                ttl,
+                p_type,
+                msg,
+            )
+
+            emit({
                 "event": "PACKET_RX",
                 "origin": origin,
                 "target": target,
+                "message_id": pkt["message_id"],
                 "hops": hops,
+                "ttl": ttl,
+                "observer": MY_NODE_ID,
                 "type": p_type,
                 "message": msg,
-                "rssi": -55,
+                "related_message_id": related_message_id,
+                "_message_bytes": pkt["raw_payload"].rstrip(b"\x00"),
             })
 
             # Check if this node is the intended destination
             if target == MY_NODE_ID or target == "*":
-                print(f"[✓] DESTINATION REACHED! Packet consumed by {MY_NODE_ID}")
+                _log("info", "Packet destination reached at %s", MY_NODE_ID)
                 if p_type == "SOS":
-                    print("[!!!] EMERGENCY SOS ALERT ACTIVE [!!!]", flush=True)
+                    _log("warning", "Emergency SOS received at %s", MY_NODE_ID)
             elif target != MY_NODE_ID and ttl > 1:
                 # We are an intermediate relay node: Forward packet!
-                print(f"[➔] RELAYING HOP: Forwarding packet to {target} (Next TTL: {ttl - 1})")
+                _log("debug", "Relaying packet to %s with next TTL %d", target, ttl - 1)
                 new_frame = pack_packet(
                     origin=origin,
                     target=target,
                     ttl=ttl - 1,
                     hop_count=hops + 1,
                     msg_type=pkt["type_id"],
-                    payload=msg,
+                    payload=pkt["raw_payload"],
+                    message_id=pkt["message_id"],
                 )
                 if forward_callback:
                     forward_callback(new_frame, target)
 
-            return
-        except Exception as e:
-            pass
+            return True
+        except (ValueError, KeyError, TypeError) as error:
+            _log("warning", "Invalid Mycelium frame: %r", error)
 
     # Fallback to plain UTF-8 string
     try:
-        print("[BLE Raw Received]:", data_bytes.decode("utf-8"))
+        _log("info", "BLE raw message received: %s", data_bytes.decode("utf-8"))
     except UnicodeError:
-        print("[BLE Raw Received Invalid UTF-8]:", data_bytes)
+        _log("warning", "BLE raw message contains invalid UTF-8: %r", data_bytes)
 
 
 # ==============================================================================
@@ -144,7 +269,9 @@ def process_received_frame(raw_data: bytes, forward_callback=None, deduplicate=T
 
 async def linux_main(payload, peer, forward_mode=False):
     import asyncio
+    from peer import configure_logging
 
+    configure_logging()
     if payload is not None:
         from bleak import BleakClient, BleakScanner
 
@@ -168,12 +295,12 @@ async def linux_main(payload, peer, forward_mode=False):
                 })
             return is_match
 
-        print(f"[{MY_NODE_ID}] Scanning for Mycelium BLE peers...", flush=True)
+        _log("debug", "Scanning for Mycelium BLE peers")
         device = await BleakScanner.find_device_by_filter(matches, timeout=8.0)
         if device is None:
             raise RuntimeError("No Mycelium BLE peer found in radio range")
 
-        print(f"[{MY_NODE_ID}] Connecting to peer {device.address} (RSSI: {peer_rssi} dBm)...")
+        _log("debug", "Connecting to peer %s (RSSI: %s dBm)", device.address, peer_rssi)
         write_confirmed = False
         try:
             async with BleakClient(device) as client:
@@ -182,18 +309,22 @@ async def linux_main(payload, peer, forward_mode=False):
         except EOFError:
             if not write_confirmed:
                 raise
-            print("BLE write confirmed; D-Bus closed during disconnect", file=sys.stderr)
-        print(f"BLE write confirmed by {device.address}")
+            _log("warning", "BLE write succeeded but D-Bus closed during disconnect")
+        _log("info", "BLE write confirmed by %s", device.address)
         return
 
     await linux_listen()
 
 
 async def linux_listen(queue=None):
+    global MY_NODE_ID, EVENT_REPORT_REASSEMBLER
     import asyncio
+    from peer import configure_logging
     from dbus_fast import BusType, DBusError, PropertyAccess
     from dbus_fast.aio import MessageBus
     from dbus_fast.service import ServiceInterface, dbus_property, method
+
+    configure_logging()
 
     root = "/org/mycelium"
     service_path = root + "/service0"
@@ -262,7 +393,7 @@ async def linux_listen(queue=None):
 
         @method()
         def Release(self):
-            print("Mycelium BLE advertisement released")
+            _log("debug", "Mycelium BLE advertisement released")
 
     bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
     try:
@@ -289,24 +420,116 @@ async def linux_listen(queue=None):
         await adapter.get_interface(gatt_manager).call_register_application(root, {})
         await adapter.get_interface(advertising_manager).call_register_advertisement(advertisement_path, {})
         local_address = objects[adapter_path]["org.bluez.Adapter1"]["Address"].value.upper()
+        if not os.getenv("MYCELIUM_NODE_ID"):
+            clean_address = local_address.replace(":", "")
+            MY_NODE_ID = f"Node-{clean_address[-4:]}"
+            if queue is not None:
+                queue.set_node_id(MY_NODE_ID)
+        if queue is not None:
+            from peer import canonical_node_id
+            from protocol import (
+                EVENT_PACKET_RX,
+                EVENT_PACKET_STATE,
+                TYPE_HEARTBEAT,
+                TYPE_SOS,
+                TYPE_TELEMETRY,
+                TYPE_CHAT,
+                TYPE_ACK,
+                TYPE_SOS_CLEAR,
+                pack_mesh_event_record,
+            )
+
+            gateway_node_id = os.getenv("MYCELIUM_GATEWAY_NODE_ID") or "Node-0000"
+            try:
+                gateway_node_id = canonical_node_id(gateway_node_id)
+            except ValueError as error:
+                raise RuntimeError(f"Invalid MYCELIUM_GATEWAY_NODE_ID: {error}") from error
+            queue.set_gateway_node_id(gateway_node_id)
+            EVENT_REPORT_REASSEMBLER = EventReportReassembler()
+            packet_types = {
+                "HEARTBEAT": TYPE_HEARTBEAT,
+                "SOS": TYPE_SOS,
+                "TELEMETRY": TYPE_TELEMETRY,
+                "CHAT": TYPE_CHAT,
+                "ACK": TYPE_ACK,
+                "SOS_CLEAR": TYPE_SOS_CLEAR,
+            }
+
+            def handle_peer_event(event):
+                event.setdefault("occurredAt", int(time.time() * 1000))
+                event_type = event.get("event")
+                if event_type in {"PACKET_RX", "PACKET_STATE"}:
+                    packet = event.get("packet", event)
+                    packet_type = packet_types.get(
+                        packet.get("type") if event_type == "PACKET_RX"
+                        else (packet.get("payload") or {}).get("type")
+                    )
+                    if packet_type is not None:
+                        message = event.get("_message_bytes")
+                        if message is None:
+                            message = (
+                                (packet.get("message") or "").encode("utf-8")
+                                if event_type == "PACKET_RX"
+                                else ((packet.get("payload") or {}).get("message") or "").encode("utf-8")
+                            )
+                        if packet_type == TYPE_SOS_CLEAR:
+                            message = b""
+                        message = message[:MAX_PAYLOAD]
+                        current_hop = packet.get("currentHop") or {}
+                        record = pack_mesh_event_record(
+                            event_kind=(
+                                EVENT_PACKET_RX if event_type == "PACKET_RX"
+                                else EVENT_PACKET_STATE
+                            ),
+                            origin=packet.get("origin"),
+                            target=packet.get("target"),
+                            message_id=packet.get("message_id", packet.get("messageId", 0)),
+                            packet_type=packet_type,
+                            ttl=packet.get("ttl", 0),
+                            hop_count=packet.get("hops", packet.get("hop_count", 0)),
+                            observed_at=event["occurredAt"] // 1000,
+                            message=message,
+                            status=None if event_type == "PACKET_RX" else packet.get("status"),
+                            related_message_id=packet.get("related_message_id", 0),
+                            hop_source=current_hop.get("source"),
+                        )
+                        if queue.node_id == gateway_node_id:
+                            if BRIDGE_REPORTER is not None:
+                                try:
+                                    BRIDGE_REPORTER.send_mesh_event(
+                                        unpack_mesh_event_record(record), queue.node_id
+                                    )
+                                except OSError as error:
+                                    _log("warning", "Could not deliver local mesh event: %r", error)
+                        elif gateway_node_id:
+                            reliable = packet_type in (TYPE_SOS, TYPE_SOS_CLEAR)
+                            if not queue.queue_event_report(record, reliable=reliable):
+                                _log("warning", "Could not queue mesh event for gateway %s", gateway_node_id)
+                safe_event = {key: value for key, value in event.items() if not key.startswith("_")}
+                emit_event(safe_event)
+
+            queue.on_event = handle_peer_event
+
         emit_event({"event": "NODE_ANNOUNCE", "node_id": MY_NODE_ID, "mac": local_address})
-        print(f"Mycelium node {MY_NODE_ID}; BLE address {local_address}", flush=True)
+        _log("info", "Mycelium node %s; BLE address %s", MY_NODE_ID, local_address)
 
         if queue is None:
+            _log("info", "Listening for Mycelium BLE writes")
             await bus.wait_for_disconnect()
         else:
             from peer import run
 
             peer_task = asyncio.create_task(run(queue, SERVICE, INBOX, local_address))
             bus_task = asyncio.create_task(bus.wait_for_disconnect())
+            active_tasks = [peer_task, bus_task]
             try:
-                done, _ = await asyncio.wait((peer_task, bus_task), return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait(active_tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     task.result()
             finally:
-                for task in (peer_task, bus_task):
+                for task in active_tasks:
                     task.cancel()
-                await asyncio.gather(peer_task, bus_task, return_exceptions=True)
+                await asyncio.gather(*active_tasks, return_exceptions=True)
     finally:
         bus.disconnect()
 
@@ -412,7 +635,7 @@ def esp_main(payload, peer):
         wait_for(lambda: write_status is not None, "write")
         if write_status:
             raise RuntimeError(f"GATT write failed: {write_status}")
-        print("GATT write accepted by", target[1].hex())
+        _log("info", "GATT write accepted by %s", target[1].hex())
     finally:
         radio.active(False)
 
@@ -433,10 +656,18 @@ def main(args=None):
         import asyncio
         from peer import PeerQueue
 
-        def receive_chat(frame):
-            process_received_frame(frame, deduplicate=False)
+        queue_holder = {}
 
-        asyncio.run(linux_listen(PeerQueue(MY_NODE_ID, receive_chat)))
+        def receive_chat(frame):
+            return process_received_frame(
+                frame,
+                deduplicate=False,
+                event_callback=queue_holder["queue"].on_event,
+            )
+
+        queue = PeerQueue(MY_NODE_ID, receive_chat, emit_event)
+        queue_holder["queue"] = queue
+        asyncio.run(linux_listen(queue))
         return
 
     if not args or args == ["listen"]:
@@ -447,7 +678,24 @@ def main(args=None):
     elif args == ["sos"]:
         # Pack an Emergency SOS alert broadcast
         payload = pack_packet(origin=MY_NODE_ID, target="*", ttl=4, hop_count=0, msg_type=TYPE_SOS, payload="SOS")
-        print(f"[{MY_NODE_ID}] Generated Emergency SOS Broadcast Frame (20B)")
+        message_id = unpack_packet(payload)["message_id"]
+        print(f"[{MY_NODE_ID}] Generated SOS message ID 0x{message_id:08X} (20B frame)")
+    elif args[:1] == ["sos-clear"] and len(args) == 2:
+        try:
+            alert_message_id = int(args[1], 0)
+        except ValueError:
+            try:
+                alert_message_id = int(args[1], 16)
+            except ValueError as error:
+                raise SystemExit("SOS message ID must be decimal or hexadecimal") from error
+        payload = pack_packet(
+            origin=MY_NODE_ID,
+            target="*",
+            ttl=4,
+            msg_type=TYPE_SOS_CLEAR,
+            payload=pack_sos_clear_payload(alert_message_id),
+        )
+        print(f"[{MY_NODE_ID}] Generated SOS_CLEAR for 0x{alert_message_id:08X} (20B frame)")
     elif args[:1] == ["send"] and len(args) >= 3:
         target_node = args[1]
         msg = " ".join(args[2:])
@@ -465,6 +713,7 @@ def main(args=None):
         print("  python3 ble.py send <target_node_id> <message>")
         print("  python3 ble.py send <message> (Broadcast)")
         print("  python3 ble.py sos")
+        print("  python3 ble.py sos-clear <sos_message_id>")
         print("  python3 ble.py ping")
         return
 

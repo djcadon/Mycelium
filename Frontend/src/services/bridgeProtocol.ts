@@ -1,10 +1,12 @@
-import type { MeshAlert, MeshLink, MeshNode, HopPacket } from '../types/mesh';
+import type { MeshAlert, MeshLink, MeshNode, MeshRoute, HopPacket } from '../types/mesh';
 
 export const MAX_PAYLOAD_BYTES = 512;
 
 export type BridgeEvent =
-  | { type: 'STATE_SNAPSHOT'; nodes: MeshNode[]; links: MeshLink[]; alerts: MeshAlert[]; packets: HopPacket[] }
+  | { type: 'BRIDGE_CAPABILITIES'; maxPayloadBytes: number; transport: string }
+  | { type: 'STATE_SNAPSHOT'; nodes: MeshNode[]; links: MeshLink[]; routes: MeshRoute[]; alerts: MeshAlert[]; packets: HopPacket[] }
   | { type: 'TOPOLOGY_UPDATE'; nodes: MeshNode[]; links: MeshLink[] }
+  | { type: 'ROUTE_UPDATE'; gatewayNodeId: string; routes: MeshRoute[]; occurredAt: number }
   | { type: 'PEER_UPDATE'; node: MeshNode }
   | { type: 'ALERT_RAISED'; alert: MeshAlert }
   | { type: 'ALERT_CLEARED'; alertId: string; occurredAt: number }
@@ -144,12 +146,63 @@ function parseLink(value: unknown): MeshLink {
   const id = string(input.id, 'link.id');
   if (typeof input.active !== 'boolean') throw new Error(`link ${id}.active must be a boolean`);
   const rssi = input.rssi === undefined ? undefined : number(input.rssi, `link ${id}.rssi`);
+  const rssiMedian = input.rssiMedian === undefined
+    ? undefined
+    : number(input.rssiMedian, `link ${id}.rssiMedian`);
+  const rssiMad = input.rssiMad === undefined
+    ? undefined
+    : number(input.rssiMad, `link ${id}.rssiMad`);
+  const sampleCount = input.sampleCount === undefined
+    ? undefined
+    : number(input.sampleCount, `link ${id}.sampleCount`);
+  const measurementWindowMs = input.measurementWindowMs === undefined
+    ? undefined
+    : number(input.measurementWindowMs, `link ${id}.measurementWindowMs`);
+  if (rssiMad !== undefined && rssiMad < 0) throw new Error(`link ${id}.rssiMad must be non-negative`);
+  if (sampleCount !== undefined && (!Number.isInteger(sampleCount) || sampleCount < 1)) {
+    throw new Error(`link ${id}.sampleCount must be a positive integer`);
+  }
+  if (measurementWindowMs !== undefined && (!Number.isInteger(measurementWindowMs) || measurementWindowMs < 1)) {
+    throw new Error(`link ${id}.measurementWindowMs must be a positive integer`);
+  }
   return {
     id,
     source: string(input.source, `link ${id}.source`),
     target: string(input.target, `link ${id}.target`),
     ...(rssi === undefined ? {} : { rssi }),
+    ...(rssiMedian === undefined ? {} : { rssiMedian }),
+    ...(rssiMad === undefined ? {} : { rssiMad }),
+    ...(sampleCount === undefined ? {} : { sampleCount }),
+    ...(measurementWindowMs === undefined ? {} : { measurementWindowMs }),
+    ...(input.observedAt === undefined ? {} : { observedAt: timestamp(input.observedAt, `link ${id}.observedAt`) }),
     active: input.active,
+  };
+}
+
+function parseRoute(value: unknown): MeshRoute {
+  const input = record(value, 'route');
+  const destination = string(input.destination, 'route.destination');
+  const status = input.status;
+  const hopCount = number(input.hopCount, `route ${destination}.hopCount`);
+  if (!Number.isInteger(hopCount) || hopCount < 0 || hopCount > 4) {
+    throw new Error(`route ${destination}.hopCount must be an integer from 0 to 4`);
+  }
+  const nextHop = input.nextHop === null
+    ? null
+    : string(input.nextHop, `route ${destination}.nextHop`);
+  if (
+    (status === 'local' && (nextHop !== null || hopCount !== 0))
+    || (status === 'reachable' && (nextHop === null || hopCount === 0))
+    || (status !== 'local' && status !== 'reachable')
+  ) {
+    throw new Error(`route ${destination} has inconsistent route fields`);
+  }
+  return {
+    destination,
+    nextHop,
+    hopCount,
+    status,
+    updatedAt: timestamp(input.updatedAt, `route ${destination}.updatedAt`),
   };
 }
 
@@ -233,16 +286,35 @@ export function parseBridgeEvent(value: unknown): BridgeEvent {
   const input = record(value, 'bridge event');
   const type = string(input.type, 'bridge event.type');
   switch (type) {
+    case 'BRIDGE_CAPABILITIES': {
+      const maxPayloadBytes = number(input.maxPayloadBytes, 'maxPayloadBytes');
+      if (!Number.isInteger(maxPayloadBytes) || maxPayloadBytes < 1 || maxPayloadBytes > 512) {
+        throw new Error('maxPayloadBytes must be an integer between 1 and 512');
+      }
+      return {
+        type,
+        maxPayloadBytes,
+        transport: string(input.transport, 'transport'),
+      };
+    }
     case 'STATE_SNAPSHOT':
       return {
         type,
         nodes: parseNodes(input.nodes),
         links: parseLinks(input.links),
+        routes: input.routes === undefined ? [] : array(input.routes, 'routes').map(parseRoute),
         alerts: input.alerts === undefined ? [] : array(input.alerts, 'alerts').map(parseAlert),
         packets: input.packets === undefined ? [] : array(input.packets, 'packets').map(parsePacket),
       };
     case 'TOPOLOGY_UPDATE':
       return { type, nodes: parseNodes(input.nodes), links: parseLinks(input.links) };
+    case 'ROUTE_UPDATE':
+      return {
+        type,
+        gatewayNodeId: string(input.gatewayNodeId, 'gatewayNodeId'),
+        routes: array(input.routes, 'routes').map(parseRoute),
+        occurredAt: timestamp(input.occurredAt, 'occurredAt'),
+      };
     case 'PEER_UPDATE':
       return { type, node: parseNode(input.node) };
     case 'ALERT_RAISED':

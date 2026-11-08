@@ -3,6 +3,7 @@ import type {
   MeshAlert,
   MeshLink,
   MeshNode,
+  MeshRoute,
   HopPacket,
   OutboundMessage,
 } from '../types/mesh';
@@ -17,9 +18,11 @@ export type BridgeConnectionStatus = 'connecting' | 'connected' | 'reconnecting'
 interface MeshBridgeState {
   nodes: MeshNode[];
   links: MeshLink[];
+  routes: MeshRoute[];
   packets: HopPacket[];
   alerts: MeshAlert[];
   messages: OutboundMessage[];
+  maxPayloadBytes: number;
   connectionStatus: BridgeConnectionStatus;
   lastEventAt: number | null;
   error: string | null;
@@ -47,9 +50,11 @@ function updateMessage(
 export function useMeshBridge(): MeshBridgeState {
   const [nodes, setNodes] = useState<MeshNode[]>([]);
   const [links, setLinks] = useState<MeshLink[]>([]);
+  const [routes, setRoutes] = useState<MeshRoute[]>([]);
   const [packets, setPackets] = useState<HopPacket[]>([]);
   const [alerts, setAlerts] = useState<MeshAlert[]>([]);
   const [messages, setMessages] = useState<OutboundMessage[]>([]);
+  const [maxPayloadBytes, setMaxPayloadBytes] = useState(MAX_PAYLOAD_BYTES);
   const [connectionStatus, setConnectionStatus] =
     useState<BridgeConnectionStatus>('connecting');
   const [lastEventAt, setLastEventAt] = useState<number | null>(null);
@@ -69,15 +74,22 @@ export function useMeshBridge(): MeshBridgeState {
     setError(null);
 
     switch (event.type) {
+      case 'BRIDGE_CAPABILITIES':
+        setMaxPayloadBytes(event.maxPayloadBytes);
+        break;
       case 'STATE_SNAPSHOT':
         setNodes(event.nodes);
         setLinks(event.links);
+        setRoutes(event.routes);
         setAlerts(event.alerts.slice(-MAX_HISTORY));
         setPackets(event.packets.slice(-MAX_HISTORY));
         break;
       case 'TOPOLOGY_UPDATE':
         setNodes(event.nodes);
         setLinks(event.links);
+        break;
+      case 'ROUTE_UPDATE':
+        setRoutes(event.routes);
         break;
       case 'PEER_UPDATE':
         setNodes((current) => {
@@ -258,9 +270,9 @@ export function useMeshBridge(): MeshBridgeState {
     } else if (!payload.trim()) {
       status = 'failed';
       sendError = 'Enter a message before sending.';
-    } else if (byteLength > MAX_PAYLOAD_BYTES) {
+    } else if (byteLength > maxPayloadBytes) {
       status = 'failed';
-      sendError = `Message is ${byteLength} bytes; the current packet payload limit is ${MAX_PAYLOAD_BYTES} bytes.`;
+      sendError = `Message is ${byteLength} bytes; the current packet payload limit is ${maxPayloadBytes} bytes.`;
     } else if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
       status = 'failed';
       sendError = 'The bridge is not connected.';
@@ -295,7 +307,7 @@ export function useMeshBridge(): MeshBridgeState {
             ? {
                 ...currentMessage,
                 status: 'unconfirmed',
-                error: 'No bridge acceptance reply. Delivery is unknown; the request was not retried.',
+                error: 'No bridge acceptance reply. The BLE node may still be processing the send request.',
               }
             : currentMessage,
         ));
@@ -312,14 +324,16 @@ export function useMeshBridge(): MeshBridgeState {
       setError(detail);
     }
     return requestId;
-  }, [clearRequestTimer]);
+  }, [clearRequestTimer, maxPayloadBytes]);
 
   return {
     nodes,
     links,
+    routes,
     packets,
     alerts,
     messages,
+    maxPayloadBytes,
     connectionStatus,
     lastEventAt,
     error,

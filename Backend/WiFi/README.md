@@ -1,7 +1,7 @@
 # Wi-Fi bridge experiment
 
 This directory is isolated from the BLE implementation; nothing here changes
-`Backend/ble.py`, `peer.py`, or `protocol.py`.
+`Board/bricks/mycelium_ble/ble.py`, `peer.py`, or `protocol.py`.
 
 ## Current: Local UI bridge over Guest Wi-Fi
 
