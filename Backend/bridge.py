@@ -116,6 +116,8 @@ class BleUiBridge:
             if not all(isinstance(value, str) and NODE_ID_PATTERN.fullmatch(value) for value in (source, target)):
                 LOG.warning("Ignoring link update with invalid node IDs")
                 return
+            if source == target:
+                return
             active = event.get("active", True)
             if not isinstance(active, bool):
                 LOG.warning("Ignoring link update with invalid active flag")
@@ -228,17 +230,33 @@ class BleUiBridge:
         self._upsert_node(origin, occurred_at)
         observer_id = observer if isinstance(observer, str) and NODE_ID_PATTERN.fullmatch(observer) else target
         packet_id = _wire_message_id(origin, message_id)
+        route_to_origin = next(
+            (r for r in self.routes if r.get("destination") == origin and r.get("status") == "reachable"),
+            None,
+        )
+        hop_source = event.get("current_hop_source")
+        if not hop_source and route_to_origin and route_to_origin.get("nextHop"):
+            hop_source = route_to_origin["nextHop"]
+        if not hop_source:
+            hop_source = origin
+
+        path = [origin, observer_id]
+        if hop_source not in (origin, observer_id):
+            path = [origin, hop_source, observer_id]
+        if observer_id != target and target != "*":
+            path.append(target)
+
         packet_state = {
             "id": packet_id,
             "origin": origin,
             "target": target,
             "message_id": message_id,
             "currentHop": {
-                "source": event.get("current_hop_source") or origin,
+                "source": hop_source,
                 "target": observer_id,
                 "progress": 0,
             },
-            "path": [origin, observer_id] if observer_id == target else [origin, observer_id, target],
+            "path": path,
             "ttl": event.get("ttl", 0),
             "hop_count": event.get("hops", 0),
             "status": "forwarding" if observer_id != target else "awaiting_ack",
@@ -472,12 +490,17 @@ class BleUiBridge:
             target = self.nodes.get(link["target"])
             link_id = link["id"]
             link_age = now - self.link_last_seen.get(link_id, 0)
+            is_routed_link = (
+                (source and source.get("id") in reachable_route_destinations)
+                or (target and target.get("id") in reachable_route_destinations)
+            )
+            lease_limit = OFFLINE_PRUNE_SECONDS if is_routed_link else PEER_LEASE_SECONDS
             if link["active"] and (
                 source is None
                 or target is None
                 or source["status"] == "offline"
                 or target["status"] == "offline"
-                or link_age > PEER_LEASE_SECONDS
+                or link_age > lease_limit
             ):
                 link["active"] = False
                 changed = True

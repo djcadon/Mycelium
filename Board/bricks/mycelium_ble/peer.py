@@ -308,6 +308,27 @@ class PeerQueue:
         else:
             LOG.warning("Ignoring route destination beyond the %d-entry limit", MAX_ROUTE_ENTRIES)
 
+    def observe_direct_neighbor(self, address, peer_node_id, now=None):
+        try:
+            peer_node_id = canonical_node_id(peer_node_id)
+        except ValueError:
+            return
+        if peer_node_id == self.node_id or peer_node_id in self.colliding_node_ids:
+            return
+        address = address.upper()
+        now = time.monotonic() if now is None else now
+        self.peer_ids[address] = peer_node_id
+        self._remember_destination(peer_node_id)
+        neighbor_routes = self.neighbor_routes.setdefault(address, {})
+        previous = neighbor_routes.get(peer_node_id)
+        if previous is None or previous.get("hop_count") != 1 or now - previous.get("updated_at", 0) > 3:
+            neighbor_routes[peer_node_id] = {
+                "hop_count": 1,
+                "sequence": 0,
+                "updated_at": now,
+            }
+            self._recompute_routes()
+
     def _quarantine_identity(self, node_id, addresses):
         addresses = {address.upper() for address in addresses if address}
         addresses.update(
@@ -873,6 +894,12 @@ async def run(queue, service, inbox, local_address, local_server=True):
             now = time.monotonic()
             neighbors[address] = (device, now)
             peer_node_id = queue.peer_ids.get(address)
+            if not peer_node_id:
+                clean_mac = address.replace(":", "").replace("-", "").upper()
+                if len(clean_mac) >= 4:
+                    peer_node_id = f"Node-{clean_mac[-4:]}"
+            if peer_node_id:
+                queue.observe_direct_neighbor(address, peer_node_id, now)
             if peer_node_id and now - last_link_event.get(address, 0) >= LINK_REPORT_INTERVAL:
                 last_link_event[address] = now
                 event = {
@@ -1000,7 +1027,10 @@ async def run(queue, service, inbox, local_address, local_server=True):
                                 if task.done():
                                     del links[address]
                                     retry_at[address] = now + random.uniform(3, 5)
-                                    task.result()
+                                    try:
+                                        task.result()
+                                    except Exception as error:
+                                        LOG.warning("BLE link task for %s completed with error: %s", address, error)
                             for address, (device, seen_at) in list(neighbors.items()):
                                 if now - seen_at > 25 and address not in links:
                                     neighbors.pop(address)
@@ -1009,7 +1039,6 @@ async def run(queue, service, inbox, local_address, local_server=True):
                                     continue
                                 if len(links) < MAX_LINKS and address not in links and now >= retry_at.get(address, 0):
                                     links[address] = asyncio.create_task(maintain_link(device))
-                                    break
                 except (BleakError, EOFError, OSError) as error:
                     LOG.warning(
                         "BLE scanner failed; restarting in 5 seconds: %s (%r)",

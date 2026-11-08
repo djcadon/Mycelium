@@ -75,6 +75,7 @@ class WindowsBleMeshNode:
         self.event_queue = asyncio.Queue()
         self.loop = asyncio.get_running_loop()
         self.next_message_id = time.time_ns() & 0xFFFFFFFF
+        self._device_address_cache = {}
 
     @classmethod
     def create(cls, bridge, node_id):
@@ -241,15 +242,17 @@ class WindowsBleMeshNode:
                 request.respond_with_protocol_error(0x0D)
                 return
 
-            from winrt.windows.devices.bluetooth import BluetoothLEDevice
+            session_id = getattr(getattr(args.session, "device_id", None), "id", None)
+            source = self._device_address_cache.get(session_id) if session_id else None
+            if source is None:
+                from winrt.windows.devices.bluetooth import BluetoothLEDevice
 
-            device = await BluetoothLEDevice.from_id_async(args.session.device_id.id)
-            if device is None:
-                raise RuntimeError("Could not resolve the incoming BLE peer address")
-            try:
+                device = await BluetoothLEDevice.from_id_async(args.session.device_id.id)
+                if device is None:
+                    raise RuntimeError("Could not resolve the incoming BLE peer address")
                 source = self._format_address(device.bluetooth_address)
-            finally:
-                device.close()
+                if session_id:
+                    self._device_address_cache[session_id] = source
             self.queue.accept(bytes(value), incoming=True, source=source)
             LOG.info("Received BLE frame from %s (%d bytes)", source, len(value))
             request.respond()
@@ -261,6 +264,7 @@ class WindowsBleMeshNode:
             deferral.complete()
 
     async def close(self):
+        self._device_address_cache.clear()
         if self.provider is not None and self.is_advertising:
             self.provider.stop_advertising()
             self.is_advertising = False

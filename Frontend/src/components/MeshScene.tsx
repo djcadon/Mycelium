@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Bounds, Html, OrbitControls, Ring, Sphere } from '@react-three/drei';
 import * as THREE from 'three';
@@ -31,6 +31,11 @@ const NodeMesh: React.FC<{
 }> = ({ node, isSelected, hasAlert, onSelect }) => {
   const meshRef = useRef<THREE.Group>(null);
   const color = hasAlert ? '#a9563e' : getPeerColor(node.status);
+  const isGateway = node.id === 'Node-0000' ||
+    node.id === 'Laptop-Base' ||
+    node.hardware.toLowerCase().includes('laptop') ||
+    node.hardware.toLowerCase().includes('bridge') ||
+    node.hardware.toLowerCase().includes('host');
 
   useFrame((state) => {
     if (!meshRef.current) return;
@@ -51,7 +56,7 @@ const NodeMesh: React.FC<{
         <meshBasicMaterial transparent opacity={0} depthWrite={false} colorWrite={false} />
       </Sphere>
 
-      <Sphere position={[0, 0.12, 0]} args={[0.24, 24, 24]}>
+      <Sphere position={[0, 0.12, 0]} args={[isGateway ? 0.28 : 0.24, 24, 24]}>
         <meshStandardMaterial color={color} roughness={0.88} metalness={0} />
       </Sphere>
 
@@ -64,21 +69,47 @@ const NodeMesh: React.FC<{
           color={isSelected ? '#775a3e' : color}
           side={THREE.DoubleSide}
           transparent
-          opacity={isSelected ? 0.8 : 0.48}
+          opacity={isSelected ? 0.85 : 0.48}
         />
       </Ring>
 
-      <Html position={[0, 0.12, -0.46]} center style={{ pointerEvents: 'none' }}>
-        <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-semibold whitespace-nowrap shadow-sm select-none ${
-          isSelected
-            ? 'border-[#8c744c] text-forest bg-paper/95 ring-1 ring-[#8c744c]'
-            : 'border-[#d5d0c0] text-[#394438] bg-paper/90'
-        }`}>
+      {isGateway && (
+        <Ring
+          args={[0.45, 0.48, 32]}
+          position={[0, 0.02, 0]}
+          rotation={[Math.PI / 2, 0, 0]}
+        >
+          <meshBasicMaterial
+            color="#536b43"
+            side={THREE.DoubleSide}
+            transparent
+            opacity={0.35}
+          />
+        </Ring>
+      )}
+
+      <Html position={[0, 0.12, -0.46]} center>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelect();
+          }}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-sm font-semibold whitespace-nowrap shadow-sm cursor-pointer transition-all hover:scale-105 ${
+            isSelected
+              ? 'border-[#8c744c] text-forest bg-paper ring-1 ring-[#8c744c]'
+              : 'border-[#d5d0c0] text-[#394438] bg-paper/95 hover:border-moss hover:bg-paper'
+          }`}
+          title={`Select ${node.name}`}
+        >
           <span>{node.name}</span>
-          {(hasAlert || node.status === 'alert') && (
-            <span className="text-clay text-[9px] font-bold tracking-wider ml-0.5">SOS</span>
+          {isGateway && (
+            <span className="text-xs font-mono uppercase px-1.5 py-0.5 rounded bg-moss/20 text-moss font-bold ml-1">Gateway</span>
           )}
-        </div>
+          {(hasAlert || node.status === 'alert') && (
+            <span className="text-clay text-xs font-bold tracking-wider ml-1">SOS</span>
+          )}
+        </button>
       </Html>
     </group>
   );
@@ -88,7 +119,9 @@ const LinkLine: React.FC<{
   link: MeshLink;
   sourceNode?: MeshNode;
   targetNode?: MeshNode;
-}> = ({ link, sourceNode, targetNode }) => {
+  isHighlighted?: boolean;
+  isDimmed?: boolean;
+}> = ({ link, sourceNode, targetNode, isHighlighted, isDimmed }) => {
   if (!sourceNode || !targetNode || !link.active) return null;
 
   const points = [
@@ -96,13 +129,17 @@ const LinkLine: React.FC<{
     new THREE.Vector3(targetNode.position[0], targetNode.position[1] + 0.035, targetNode.position[2]),
   ];
   const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const color = link.rssi === undefined
-    ? '#999487'
-    : link.rssi > -60
-      ? '#536b43'
-      : link.rssi > -75
-        ? '#b28a49'
-        : '#a9563e';
+  const color = isHighlighted
+    ? '#775a3e'
+    : link.rssi === undefined
+      ? '#999487'
+      : link.rssi > -60
+        ? '#536b43'
+        : link.rssi > -75
+          ? '#b28a49'
+          : '#a9563e';
+
+  const opacity = isHighlighted ? 0.95 : isDimmed ? 0.25 : 0.76;
 
   return (
     <primitive
@@ -111,7 +148,7 @@ const LinkLine: React.FC<{
         new THREE.LineBasicMaterial({
           color,
           transparent: true,
-          opacity: 0.76,
+          opacity,
         }),
       )}
     />
@@ -161,6 +198,25 @@ export const MeshScene: React.FC<MeshSceneProps> = ({
     .map((node) => `${node.id}:${node.position.join(',')}`)
     .join('|');
 
+  const uniqueLinks = useMemo(() => {
+    const linkMap = new Map<string, MeshLink>();
+    for (const link of links) {
+      if (!link.active || link.source === link.target) continue;
+      const pairKey = [link.source, link.target].sort().join('--');
+      const existing = linkMap.get(pairKey);
+      if (!existing) {
+        linkMap.set(pairKey, link);
+      } else {
+        const existingRssi = existing.rssiMedian ?? existing.rssi;
+        const currentRssi = link.rssiMedian ?? link.rssi;
+        if (currentRssi !== undefined && (existingRssi === undefined || currentRssi > existingRssi)) {
+          linkMap.set(pairKey, link);
+        }
+      }
+    }
+    return Array.from(linkMap.values());
+  }, [links]);
+
   return (
     <>
       <ambientLight intensity={1.6} />
@@ -183,14 +239,27 @@ export const MeshScene: React.FC<MeshSceneProps> = ({
       {nodes.length > 0 && (
         <Bounds key={layoutKey} fit observe margin={1.12}>
           <group>
-            {links.map((link) => (
-              <LinkLine
-                key={link.id}
-                link={link}
-                sourceNode={nodeMap.get(link.source)}
-                targetNode={nodeMap.get(link.target)}
-              />
-            ))}
+            {uniqueLinks.map((link) => {
+              const isHighlighted = Boolean(
+                selectedNodeId &&
+                (link.source === selectedNodeId || link.target === selectedNodeId),
+              );
+              const isDimmed = Boolean(
+                selectedNodeId &&
+                link.source !== selectedNodeId &&
+                link.target !== selectedNodeId,
+              );
+              return (
+                <LinkLine
+                  key={link.id}
+                  link={link}
+                  sourceNode={nodeMap.get(link.source)}
+                  targetNode={nodeMap.get(link.target)}
+                  isHighlighted={isHighlighted}
+                  isDimmed={isDimmed}
+                />
+              );
+            })}
 
             {nodes.map((node) => (
               <NodeMesh

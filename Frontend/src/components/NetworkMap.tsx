@@ -27,54 +27,217 @@ function getTopologyLayout(nodes: MeshNode[], links: MeshLink[]): Map<string, Po
   const points = new Map<string, Point>();
   if (nodes.length === 0) return points;
 
-  const root = nodes.find((node) => node.id === 'Laptop-Base') ?? nodes[0];
-  const neighbors = new Map(nodes.map((node) => [node.id, new Set<string>()]));
+  // 1. Identify Root (Gateway node)
+  const root = nodes.find((node) =>
+    node.id === 'Node-0000' ||
+    node.id === 'Laptop-Base' ||
+    node.hardware.toLowerCase().includes('laptop') ||
+    node.hardware.toLowerCase().includes('bridge') ||
+    node.hardware.toLowerCase().includes('host'),
+  ) ?? nodes[0];
 
+  // 2. Build Undirected Adjacency Graph from Active Links
+  const adjacency = new Map<string, Set<string>>();
+  for (const node of nodes) {
+    adjacency.set(node.id, new Set<string>());
+  }
   for (const link of links) {
-    if (!link.active) continue;
-    neighbors.get(link.source)?.add(link.target);
-    neighbors.get(link.target)?.add(link.source);
+    if (!link.active || link.source === link.target) continue;
+    adjacency.get(link.source)?.add(link.target);
+    adjacency.get(link.target)?.add(link.source);
   }
 
+  // 3. BFS Tree to compute depths, parent pointers, and child hierarchy
   const depth = new Map<string, number>([[root.id, 0]]);
-  const queue = [root.id];
+  const children = new Map<string, string[]>();
+  for (const node of nodes) {
+    children.set(node.id, []);
+  }
 
+  const queue = [root.id];
   for (let cursor = 0; cursor < queue.length; cursor += 1) {
-    const nodeId = queue[cursor];
-    const nextDepth = (depth.get(nodeId) ?? 0) + 1;
-    for (const neighborId of neighbors.get(nodeId) ?? []) {
-      if (depth.has(neighborId)) continue;
-      depth.set(neighborId, nextDepth);
-      queue.push(neighborId);
+    const u = queue[cursor];
+    const uDepth = depth.get(u) ?? 0;
+    const neighbors = Array.from(adjacency.get(u) ?? []).sort((a, b) => a.localeCompare(b));
+    for (const v of neighbors) {
+      if (!depth.has(v)) {
+        depth.set(v, uDepth + 1);
+        children.get(u)?.push(v);
+        queue.push(v);
+      }
     }
   }
 
+  // Any disconnected nodes get attached as layer 1 to root
   for (const node of nodes) {
-    if (!depth.has(node.id)) depth.set(node.id, 1);
+    if (!depth.has(node.id)) {
+      depth.set(node.id, 1);
+      children.get(root.id)?.push(node.id);
+    }
   }
 
-  const layers = new Map<number, MeshNode[]>();
-  for (const node of nodes) {
-    const layer = depth.get(node.id) ?? 1;
-    const group = layers.get(layer) ?? [];
-    group.push(node);
-    layers.set(layer, group);
+  // 4. Initial Position Seeding: Angular Sector Distribution
+  // Calculate subtree sizes for angular allocation around root
+  const subtreeSize = new Map<string, number>();
+  function calcSubtree(nodeId: string): number {
+    let count = 1;
+    for (const childId of children.get(nodeId) ?? []) {
+      count += calcSubtree(childId);
+    }
+    subtreeSize.set(nodeId, count);
+    return count;
   }
+  calcSubtree(root.id);
 
-  points.set(root.id, { x: 0, y: 0 });
-  for (const [layer, group] of layers) {
-    if (layer === 0) continue;
-    const ordered = [...group].sort((a, b) => a.id.localeCompare(b.id));
-    const radiusX = Math.min(190 + layer * 72, 420);
-    const radiusY = Math.min(115 + layer * 48, 260);
+  const nodePositions = new Map<string, { x: number; y: number }>();
+  nodePositions.set(root.id, { x: 0, y: 0 });
 
-    ordered.forEach((node, index) => {
-      const angle = -Math.PI / 2 + (index / ordered.length) * Math.PI * 2;
-      points.set(node.id, {
-        x: Math.cos(angle) * radiusX,
-        y: Math.sin(angle) * radiusY,
+  function assignPositions(
+    nodeId: string,
+    startAngle: number,
+    endAngle: number,
+    currentRadius: number,
+  ) {
+    const childList = children.get(nodeId) ?? [];
+    if (childList.length === 0) return;
+
+    const totalSubtree = childList.reduce((sum, c) => sum + (subtreeSize.get(c) ?? 1), 0);
+    const availableAngle = endAngle - startAngle;
+
+    let currentAngle = startAngle;
+    for (const childId of childList) {
+      const size = subtreeSize.get(childId) ?? 1;
+      const span = (size / totalSubtree) * availableAngle;
+      const angle = currentAngle + span / 2;
+      const radius = currentRadius + 140;
+
+      nodePositions.set(childId, {
+        x: Math.cos(angle) * radius,
+        y: Math.sin(angle) * radius,
       });
-    });
+
+      // Recurse for child's subtree within its allocated sector
+      assignPositions(childId, currentAngle, currentAngle + span, radius);
+      currentAngle += span;
+    }
+  }
+
+  // Seed radial sectors across the 360-degree circle around root
+  assignPositions(root.id, -Math.PI, Math.PI, 0);
+
+  // 5. Force-Directed Physics Relaxation (Fruchterman-Reingold)
+  // Simulates spring forces along links + Coulomb repulsion between all nodes
+  const iterations = 90;
+  const kRepulsion = 160;
+  const kSpring = 0.055;
+  const idealDistance = 145;
+
+  const simNodes = nodes.map((node) => {
+    const init = nodePositions.get(node.id) ?? { x: 0, y: 0 };
+    return {
+      id: node.id,
+      x: init.x,
+      y: init.y,
+      vx: 0,
+      vy: 0,
+      isRoot: node.id === root.id,
+    };
+  });
+
+  const nodeIndexMap = new Map(simNodes.map((n, idx) => [n.id, idx]));
+
+  // Build unique undirected links
+  const undirectedLinks: Array<{ sourceIdx: number; targetIdx: number }> = [];
+  const seenPairs = new Set<string>();
+  for (const link of links) {
+    if (!link.active || link.source === link.target) continue;
+    const pair = [link.source, link.target].sort().join('--');
+    if (!seenPairs.has(pair)) {
+      seenPairs.add(pair);
+      const sIdx = nodeIndexMap.get(link.source);
+      const tIdx = nodeIndexMap.get(link.target);
+      if (sIdx !== undefined && tIdx !== undefined) {
+        undirectedLinks.push({ sourceIdx: sIdx, targetIdx: tIdx });
+      }
+    }
+  }
+
+  for (let iter = 0; iter < iterations; iter += 1) {
+    const temperature = Math.max(0.12, 1 - iter / iterations);
+
+    // Repulsion between all node pairs
+    for (let i = 0; i < simNodes.length; i += 1) {
+      for (let j = i + 1; j < simNodes.length; j += 1) {
+        const u = simNodes[i];
+        const v = simNodes[j];
+        let dx = u.x - v.x;
+        let dy = u.y - v.y;
+        let dist = Math.hypot(dx, dy);
+        if (dist < 1) {
+          dx = (i + 1) * 3;
+          dy = (j + 1) * 3;
+          dist = Math.hypot(dx, dy);
+        }
+        const force = (kRepulsion * kRepulsion) / (dist * dist);
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+
+        if (!u.isRoot) {
+          u.vx += fx;
+          u.vy += fy;
+        }
+        if (!v.isRoot) {
+          v.vx -= fx;
+          v.vy -= fy;
+        }
+      }
+    }
+
+    // Spring attraction along active links
+    for (const link of undirectedLinks) {
+      const u = simNodes[link.sourceIdx];
+      const v = simNodes[link.targetIdx];
+      const dx = v.x - u.x;
+      const dy = v.y - u.y;
+      const dist = Math.max(0.1, Math.hypot(dx, dy));
+      const delta = dist - idealDistance;
+      const force = delta * kSpring;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+
+      if (!u.isRoot) {
+        u.vx += fx;
+        u.vy += fy;
+      }
+      if (!v.isRoot) {
+        v.vx -= fx;
+        v.vy -= fy;
+      }
+    }
+
+    // Apply velocities with temperature damping
+    for (const node of simNodes) {
+      if (node.isRoot) {
+        node.x = 0;
+        node.y = 0;
+        node.vx = 0;
+        node.vy = 0;
+        continue;
+      }
+      const speed = Math.hypot(node.vx, node.vy);
+      const maxDisplacement = 28 * temperature;
+      if (speed > 0) {
+        const factor = Math.min(speed, maxDisplacement) / speed;
+        node.x += node.vx * factor;
+        node.y += node.vy * factor;
+      }
+      node.vx *= 0.52;
+      node.vy *= 0.52;
+    }
+  }
+
+  for (const node of simNodes) {
+    points.set(node.id, { x: node.x, y: node.y });
   }
 
   return points;
