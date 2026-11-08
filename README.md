@@ -59,13 +59,27 @@ Mycelium/
 ### 1. Start the BLE Mesh Daemon on Uno Q
 ```bash
 # On Board 1 (Listener / Base):
-python3 ble.py listen
+python3 ble.py run
 
 # On Board 2 (Broadcaster / Field Node):
 python3 ble.py send "Hello Mesh!"
 # or trigger emergency SOS:
 python3 ble.py sos
 ```
+
+On each Linux peer, keep `ble.py run` open. Run `send`, `ping`, or `sos` from
+another terminal under the same user. The command queues the frame through a
+local Unix socket. The peer advertises and scans independently of the CLI,
+and tries each discovered Mycelium peer with pending frames. No IP network or
+central server is required.
+
+The queue is in memory and bounded to 128 frames. A frame can be forwarded
+until its TTL is exhausted. The current 20-byte format deduplicates identical
+origin, destination, type and payload. Use distinct text when testing separate
+messages. `--peer <Bluetooth address>` bypasses the queue for a direct test,
+and `listen` remains available for one-shot debugging. ESP32-C3 retains the
+compatible MicroPython send/listen modes.
+
 
 ### 2. Start the 3D Visualizer on Laptop
 ```bash

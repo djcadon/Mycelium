@@ -146,11 +146,15 @@ async def linux_main(payload, peer, forward_mode=False):
     if payload is not None:
         from bleak import BleakClient, BleakScanner
 
+        peer_rssi = None
+
         def matches(device, advertisement):
+            nonlocal peer_rssi
             if peer and device.address.lower() != peer.lower():
                 return False
-            is_match = SERVICE in advertisement.service_uuids or advertisement.local_name == NAME
-            if is_match and hasattr(device, "rssi") and device.rssi:
+            is_match = bool(peer) or SERVICE in advertisement.service_uuids or advertisement.local_name == NAME
+            if is_match:
+                peer_rssi = advertisement.rssi
                 # Stream RSSI of discovered peer to the 3D bridge
                 clean_mac = device.address.replace(":", "").upper()
                 peer_node_id = f"Node-{clean_mac[-4:]}"
@@ -158,7 +162,7 @@ async def linux_main(payload, peer, forward_mode=False):
                     "event": "LINK_UPDATE",
                     "source": MY_NODE_ID,
                     "target": peer_node_id,
-                    "rssi": device.rssi,
+                    "rssi": peer_rssi,
                 })
             return is_match
 
@@ -167,16 +171,23 @@ async def linux_main(payload, peer, forward_mode=False):
         if device is None:
             raise RuntimeError("No Mycelium BLE peer found in radio range")
 
-        print(f"[{MY_NODE_ID}] Connecting to peer {device.address} (RSSI: {getattr(device, 'rssi', 'N/A')} dBm)...")
-        async with BleakClient(device) as client:
-            await client.write_gatt_char(INBOX, payload, response=True)
-            print(f"[✓] BLE Mesh frame delivered to {device.address}")
+        print(f"[{MY_NODE_ID}] Connecting to peer {device.address} (RSSI: {peer_rssi} dBm)...")
+        write_confirmed = False
+        try:
+            async with BleakClient(device) as client:
+                await client.write_gatt_char(INBOX, payload, response=True)
+                write_confirmed = True
+        except EOFError:
+            if not write_confirmed:
+                raise
+            print("BLE write confirmed; D-Bus closed during disconnect", file=sys.stderr)
+        print(f"BLE write confirmed by {device.address}")
         return
 
     await linux_listen()
 
 
-async def linux_listen():
+async def linux_listen(queue=None):
     import asyncio
     from dbus_fast import BusType, DBusError, PropertyAccess
     from dbus_fast.aio import MessageBus
@@ -229,7 +240,10 @@ async def linux_listen():
                 raise DBusError("org.bluez.Error.InvalidOffset", "Expected offset zero")
             if not 1 <= len(value) <= MAX_BYTES:
                 raise DBusError("org.bluez.Error.InvalidValueLength", "Expected 1-20 bytes")
-            process_received_frame(value, forward_callback=do_relay_forward)
+            if queue is None or len(value) != TOTAL_SIZE:
+                process_received_frame(value, forward_callback=do_relay_forward)
+            else:
+                queue.accept(bytes(value), incoming=True)
 
     class Advertisement(ServiceInterface):
         def __init__(self):
@@ -284,7 +298,21 @@ async def linux_listen():
         print(" Listening for incoming peer packets and relay hops...")
         print("=============================================================", flush=True)
 
-        await bus.wait_for_disconnect()
+        if queue is None:
+            await bus.wait_for_disconnect()
+        else:
+            from peer import run
+
+            peer_task = asyncio.create_task(run(queue, SERVICE, INBOX))
+            bus_task = asyncio.create_task(bus.wait_for_disconnect())
+            try:
+                done, _ = await asyncio.wait((peer_task, bus_task), return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    task.result()
+            finally:
+                for task in (peer_task, bus_task):
+                    task.cancel()
+                await asyncio.gather(peer_task, bus_task, return_exceptions=True)
     finally:
         bus.disconnect()
 
@@ -405,6 +433,15 @@ def main(args=None):
     if args[:1] == ["--peer"] and len(args) >= 3:
         _, peer, *args = args
 
+    if args == ["run"]:
+        if sys.implementation.name != "cpython" or sys.platform != "linux":
+            raise SystemExit("The persistent peer mode requires Linux")
+        import asyncio
+        from peer import PeerQueue
+
+        asyncio.run(linux_listen(PeerQueue(MY_NODE_ID, process_received_frame)))
+        return
+
     if not args or args == ["listen"]:
         payload = None
     elif args == ["ping"]:
@@ -426,6 +463,7 @@ def main(args=None):
         print(f"[{MY_NODE_ID}] Packed 20B broadcast mesh frame | '{msg[:13]}'")
     else:
         print("Mycelium BLE Mesh Usage:")
+        print("  python3 ble.py run")
         print("  python3 ble.py listen")
         print("  python3 ble.py send <target_node_id> <message>")
         print("  python3 ble.py send <message> (Broadcast)")
@@ -437,7 +475,16 @@ def main(args=None):
         esp_main(payload, peer)
     else:
         import asyncio
-        asyncio.run(linux_main(payload, peer))
+        async def dispatch():
+            if payload is not None and peer is None and sys.platform == "linux":
+                from peer import enqueue
+
+                if await enqueue(payload):
+                    print("Queued on local Mycelium peer")
+                    return
+            await linux_main(payload, peer)
+
+        asyncio.run(dispatch())
 
 
 if __name__ == "__main__":
