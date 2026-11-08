@@ -20,11 +20,11 @@ export function App() {
 
   const resolvedSelectedNodeId = selectedNodeId && nodes.some((node) => node.id === selectedNodeId)
     ? selectedNodeId
-    : nodes.find((node) => node.hardware !== 'Host Controller')?.id ?? null;
+    : null;
   const selectedNode = nodes.find((node) => node.id === resolvedSelectedNodeId) || null;
 
   return (
-    <div className="app-shell">
+    <div className="min-h-screen bg-canvas px-4 md:px-10 pb-6 text-ink">
       <NetworkHUD
         nodes={nodes}
         links={links}

@@ -158,9 +158,9 @@ export function NetworkMap({
   );
 
   return (
-    <div className="map-stage" role="group" aria-label="Top-down positional mesh map">
+    <div className="relative h-[clamp(520px,68vh,900px)] min-h-[500px] mx-2 md:mx-3.5 overflow-hidden border border-[#e5e0d2] bg-[#f6f4eb] bg-[radial-gradient(#c4beae_1px,transparent_1px)] [background-size:24px_24px]" role="group" aria-label="Top-down positional mesh map">
       <Canvas
-        className="network-map"
+        className="block w-full h-full"
         orthographic
         camera={{
           position: [0, 20, 0],
@@ -180,10 +180,10 @@ export function NetworkMap({
       </Canvas>
 
       {nodes.length === 0 && (
-        <div className="map-empty">
-          <span className="empty-mark" aria-hidden="true">✳</span>
-          <p>Listening for the first peer</p>
-          <span>Nodes will appear here as they are discovered.</span>
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-72 text-center pointer-events-none">
+          <span className="inline-grid w-11 h-11 place-items-center rounded-full border border-[#c9cbb5] text-moss text-xl" aria-hidden="true">✳</span>
+          <p className="mt-3 mb-1 text-forest font-serif text-lg">Listening for the first peer</p>
+          <span className="text-muted text-xs">Nodes will appear here as they are discovered.</span>
         </div>
       )}
     </div>

@@ -257,6 +257,37 @@ export function useMeshBridge(): MeshBridgeState {
     };
   }, [handleEvent]);
 
+  // Client-side safety sweep: purge nodes that have been offline for >= 30 seconds
+  useEffect(() => {
+    const sweepTimer = setInterval(() => {
+      const now = Date.now();
+      setNodes((currentNodes) => {
+        const deadNodeIds = new Set<string>();
+        const filtered = currentNodes.filter((node) => {
+          if (node.hardware === 'Host Controller' || node.hardware === 'Laptop BLE Bridge') {
+            return true;
+          }
+          // Purge if node is offline and hasn't been seen for >= 45s (15s lease + 30s offline)
+          if (node.status === 'offline' && node.lastSeen && now - node.lastSeen >= 45000) {
+            deadNodeIds.add(node.id);
+            return false;
+          }
+          return true;
+        });
+
+        if (deadNodeIds.size > 0) {
+          setLinks((currentLinks) =>
+            currentLinks.filter((link) => !deadNodeIds.has(link.source) && !deadNodeIds.has(link.target)),
+          );
+          return filtered;
+        }
+        return currentNodes;
+      });
+    }, 2000);
+
+    return () => clearInterval(sweepTimer);
+  }, []);
+
   const sendMessage = useCallback((targetId: string, payload: string) => {
     const requestId = crypto.randomUUID();
     const createdAt = Date.now();

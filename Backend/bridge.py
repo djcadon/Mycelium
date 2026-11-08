@@ -17,7 +17,8 @@ import websockets
 WS_HOST = "127.0.0.1"
 WS_PORT = 8765
 MAX_PAYLOAD_BYTES = 9
-PEER_LEASE_SECONDS = 20
+PEER_LEASE_SECONDS = 15
+OFFLINE_PRUNE_SECONDS = 30
 ACK_TIMEOUT_SECONDS = 30
 MAX_SENDS_PER_MINUTE = 10
 SEND_RATE_WINDOW_SECONDS = 60
@@ -232,8 +233,12 @@ class BleUiBridge:
             "origin": origin,
             "target": target,
             "message_id": message_id,
-            "currentHop": {"target": observer_id, "progress": 0},
-            "path": [origin, observer_id],
+            "currentHop": {
+                "source": event.get("current_hop_source") or origin,
+                "target": observer_id,
+                "progress": 0,
+            },
+            "path": [origin, observer_id] if observer_id == target else [origin, observer_id, target],
             "ttl": event.get("ttl", 0),
             "hop_count": event.get("hops", 0),
             "status": "forwarding" if observer_id != target else "awaiting_ack",
@@ -310,6 +315,7 @@ class BleUiBridge:
         else:
             node["lastSeen"] = last_seen
             node["status"] = "online"
+            node.pop("offlineSince", None)
         return node
 
     def _refresh_neighbor_counts(self):
@@ -357,7 +363,12 @@ class BleUiBridge:
             reason = f"Message exceeds the {MAX_PAYLOAD_BYTES}-byte BLE payload limit."
         elif target_id == self.local_node_id:
             reason = "Select a remote peer."
-        elif target_id not in self.nodes or self.nodes[target_id]["status"] != "online":
+        elif (
+            target_id not in self.nodes or self.nodes[target_id]["status"] != "online"
+        ) and not any(
+            r.get("destination") == target_id and r.get("status") == "reachable"
+            for r in self.routes
+        ):
             reason = "Destination has not been discovered as a reachable BLE peer."
         elif request_id in self.request_map:
             reason = "requestId has already been used."
@@ -414,25 +425,65 @@ class BleUiBridge:
         now = time.monotonic()
         now_ms = int(time.time() * 1000)
         changed = False
-        for node in self.nodes.values():
-            age = time.time() * 1000 - node["lastSeen"]
-            if node["status"] != "offline" and age > PEER_LEASE_SECONDS * 1000:
+
+        # 1. Detect offline peers and collect peers offline for >= 30 seconds
+        nodes_to_purge = []
+        reachable_route_destinations = {
+            r["destination"]
+            for r in self.routes
+            if r.get("status") == "reachable"
+        }
+        for node_id, node in list(self.nodes.items()):
+            if node_id == self.local_node_id:
+                continue
+            is_routed = node_id in reachable_route_destinations
+            age_ms = time.time() * 1000 - node["lastSeen"]
+            if node["status"] != "offline" and age_ms > PEER_LEASE_SECONDS * 1000 and not is_routed:
                 node["status"] = "offline"
+                node["offlineSince"] = now
                 changed = True
+            elif node["status"] == "offline":
+                if is_routed:
+                    node["status"] = "online"
+                    node.pop("offlineSince", None)
+                    changed = True
+                    continue
+                if "offlineSince" not in node:
+                    node["offlineSince"] = now - max(0.0, (age_ms / 1000.0) - PEER_LEASE_SECONDS)
+                if now - node["offlineSince"] >= OFFLINE_PRUNE_SECONDS:
+                    nodes_to_purge.append(node_id)
+
+        # 2. Purge expired peers and their associated links from topology
+        for node_id in nodes_to_purge:
+            LOG.info("Purging peer %s from topology after %ds offline", node_id, OFFLINE_PRUNE_SECONDS)
+            self.nodes.pop(node_id, None)
+            dead_links = [
+                link_id for link_id, link in list(self.links.items())
+                if link.get("source") == node_id or link.get("target") == node_id
+            ]
+            for link_id in dead_links:
+                self.links.pop(link_id, None)
+                self.link_last_seen.pop(link_id, None)
+            changed = True
+
+        # 3. Update active status on remaining links
         for link in self.links.values():
             source = self.nodes.get(link["source"])
+            target = self.nodes.get(link["target"])
             link_id = link["id"]
             link_age = now - self.link_last_seen.get(link_id, 0)
             if link["active"] and (
                 source is None
+                or target is None
                 or source["status"] == "offline"
+                or target["status"] == "offline"
                 or link_age > PEER_LEASE_SECONDS
             ):
                 link["active"] = False
                 changed = True
         if (
             self.routes
-            and now - self.route_last_seen > PEER_LEASE_SECONDS
+            and now - self.route_last_seen > OFFLINE_PRUNE_SECONDS
         ):
             self.routes = []
             await self.broadcast({

@@ -69,9 +69,15 @@ const NodeMesh: React.FC<{
       </Ring>
 
       <Html position={[0, 0.12, -0.46]} center style={{ pointerEvents: 'none' }}>
-        <div className={`scene-node-label${isSelected ? ' is-selected' : ''}`}>
+        <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-semibold whitespace-nowrap shadow-sm select-none ${
+          isSelected
+            ? 'border-[#8c744c] text-forest bg-paper/95 ring-1 ring-[#8c744c]'
+            : 'border-[#d5d0c0] text-[#394438] bg-paper/90'
+        }`}>
           <span>{node.name}</span>
-          {(hasAlert || node.status === 'alert') && <small>SOS</small>}
+          {(hasAlert || node.status === 'alert') && (
+            <span className="text-clay text-[9px] font-bold tracking-wider ml-0.5">SOS</span>
+          )}
         </div>
       </Html>
     </group>

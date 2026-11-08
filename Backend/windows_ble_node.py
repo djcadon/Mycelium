@@ -162,10 +162,18 @@ class WindowsBleMeshNode:
             finally:
                 self.event_queue.task_done()
 
+    def _forward_frame(self, new_frame, target):
+        LOG.info("Relaying BLE frame to target %s via queue", target)
+        try:
+            self.queue.accept(new_frame)
+        except Exception as error:
+            LOG.warning("Could not queue relayed BLE frame: %s", error)
+
     def _receive_frame(self, frame):
         return self.board_ble.process_received_frame(
             frame,
             deduplicate=False,
+            forward_callback=self._forward_frame,
             event_callback=self.queue_event,
         )
 
