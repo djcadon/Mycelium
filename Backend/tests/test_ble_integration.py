@@ -77,6 +77,25 @@ class FakeMeshNode:
 
 
 class BleIntegrationTests(unittest.TestCase):
+    def test_direct_link_count_matches_visible_neighbors_not_scan_count(self):
+        bridge = RecordingBridge()
+
+        async def scenario():
+            announce = {"event": "NODE_ANNOUNCE", "node_id": "Node-0000", "neighborCount": 4}
+            await bridge.handle_device_event(announce)
+            self.assertEqual(bridge.nodes["Node-0000"]["neighborCount"], 0)
+            for source, target in [("Node-0000", "Node-6EBB"), ("Node-6EBB", "Node-0000")]:
+                await bridge.handle_device_event({"event": "LINK_UPDATE", "source": source, "target": target})
+            await bridge.handle_device_event({**announce, "neighborCount": 7})
+            self.assertEqual(bridge.nodes["Node-0000"]["neighborCount"], 1)
+            self.assertEqual(bridge.nodes["Node-6EBB"]["neighborCount"], 1)
+            for link in bridge.links.values():
+                link["active"] = False
+            await bridge.handle_device_event(announce)
+            self.assertEqual(bridge.nodes["Node-0000"]["neighborCount"], 0)
+
+        asyncio.run(scenario())
+
     def test_windows_incoming_write_resolves_session_device_id(self):
         from Backend.windows_ble_node import WindowsBleMeshNode
         from types import SimpleNamespace

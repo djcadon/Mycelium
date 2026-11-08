@@ -101,8 +101,8 @@ class BleUiBridge:
             node["hardware"] = "Laptop BLE Bridge"
             node["name"] = node_id
             node["ip"] = "BLE"
-            if isinstance(event.get("neighborCount"), int):
-                node["neighborCount"] = event["neighborCount"]
+            # Scanner sightings are not confirmed topology links.
+            self._refresh_neighbor_counts()
             if isinstance(event.get("mac"), str):
                 node["mac"] = event["mac"]
             await self.broadcast({"type": "PEER_UPDATE", "node": node})
@@ -309,10 +309,13 @@ class BleUiBridge:
 
     def _refresh_neighbor_counts(self):
         for node in self.nodes.values():
-            node["neighborCount"] = sum(
-                1 for link in self.links.values()
-                if link["active"] and link["source"] == node["id"]
-            )
+            node["neighborCount"] = len({
+                link["target"] if link["source"] == node["id"] else link["source"]
+                for link in self.links.values()
+                if link["active"]
+                and node["id"] in (link["source"], link["target"])
+                and link["source"] != link["target"]
+            })
 
     async def handle_browser_message(self, websocket, raw_message: str):
         try:
