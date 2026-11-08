@@ -181,7 +181,7 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
           <div className="panel-heading">
             <div>
               <span className="eyebrow">Live field / network layer</span>
-              <h1 id="map-title">The mesh</h1>
+              <h1 id="map-title">Mesh topology</h1>
             </div>
             <span className="map-scale">{mapDescription}</span>
           </div>
@@ -200,7 +200,7 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
             <span><i className="legend-dot sending" /> Transmitting</span>
             <span><i className="legend-dot alert" /> Alert</span>
             <span><i className="legend-dot offline" /> Offline</span>
-            <span className="legend-note">Drag to pan · scroll to zoom · click to select · links are bridge-reported</span>
+            <span className="legend-note">Drag to pan · scroll to zoom · click to select · includes relayed peer link reports</span>
           </div>
         </section>
 

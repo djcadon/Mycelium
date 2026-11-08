@@ -257,6 +257,7 @@ TYPE_ROUTE_ADVERTISEMENT = 0x07
 TYPE_EVENT_REPORT = 0x08
 TYPE_EVENT_ACK = 0x09
 TYPE_SOS_CLEAR = 0x0A
+TYPE_TOPOLOGY_REPORT = 0x0B
 
 EVENT_PACKET_RX = 1
 EVENT_PACKET_STATE = 2
@@ -286,6 +287,7 @@ TYPE_NAMES = {
     TYPE_EVENT_REPORT: "EVENT_REPORT",
     TYPE_EVENT_ACK: "EVENT_ACK",
     TYPE_SOS_CLEAR: "SOS_CLEAR",
+    TYPE_TOPOLOGY_REPORT: "TOPOLOGY_REPORT",
 }
 
 # 0xFFFF denotes broadcast to all reachable peers.
@@ -507,7 +509,7 @@ def unpack_packet(raw_bytes: bytes) -> Dict[str, Any]:
         PACKET_FORMAT, raw_bytes
     )
 
-    if msg_type in {TYPE_LINK_REPORT, TYPE_EVENT_REPORT, TYPE_EVENT_ACK, TYPE_SOS_CLEAR}:
+    if msg_type in {TYPE_LINK_REPORT, TYPE_EVENT_REPORT, TYPE_EVENT_ACK, TYPE_SOS_CLEAR, TYPE_TOPOLOGY_REPORT}:
         payload_clean = payload_padded
         payload_str = payload_clean.hex()
     elif msg_type == TYPE_ROUTE_ADVERTISEMENT:

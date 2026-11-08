@@ -26,6 +26,7 @@ try:
         TYPE_CHAT,
         TYPE_ACK,
         TYPE_LINK_REPORT,
+        TYPE_TOPOLOGY_REPORT,
         TYPE_ROUTE_ADVERTISEMENT,
         TYPE_EVENT_REPORT,
         TYPE_EVENT_ACK,
@@ -53,6 +54,7 @@ except ImportError:
     TYPE_CHAT = 0x04
     TYPE_ACK = 0x05
     TYPE_LINK_REPORT = 0x06
+    TYPE_TOPOLOGY_REPORT = 0x0B
     TYPE_ROUTE_ADVERTISEMENT = 0x07
     TYPE_EVENT_REPORT = 0x08
     TYPE_EVENT_ACK = 0x09
@@ -151,6 +153,13 @@ def process_received_frame(raw_data: bytes, forward_callback=None, deduplicate=T
             if origin == MY_NODE_ID:
                 return
 
+            if pkt["type_id"] == TYPE_TOPOLOGY_REPORT:
+                neighbor = int.from_bytes(pkt["raw_payload"][:2], "big")
+                if neighbor == BROADCAST_ID or int_to_node_id(neighbor) == origin:
+                    return False
+                emit({"event": "LINK_UPDATE", "source": origin,
+                      "target": int_to_node_id(neighbor), "active": True})
+                return True
             if pkt["type_id"] == TYPE_LINK_REPORT:
                 try:
                     report = unpack_link_report_payload(pkt["raw_payload"])

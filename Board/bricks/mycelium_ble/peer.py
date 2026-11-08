@@ -21,6 +21,7 @@ from protocol import (
     TYPE_EVENT_ACK,
     TYPE_EVENT_REPORT,
     TYPE_LINK_REPORT,
+    TYPE_TOPOLOGY_REPORT,
     TYPE_ROUTE_ADVERTISEMENT,
     TYPE_SOS_CLEAR,
     LINK_REPORT_MAX_SAMPLES,
@@ -479,6 +480,30 @@ class PeerQueue:
     def expire_routes(self):
         self._recompute_routes()
 
+    def advertise_topology(self):
+        """Flood confirmed direct adjacency independently of scanner callbacks/RSSI."""
+        if self.identity_conflicted:
+            return
+        now = time.monotonic()
+        for address, neighbor in list(self.peer_ids.items()):
+            route = self.neighbor_routes.get(address, {}).get(neighbor)
+            if (address in self.quarantined_neighbors or route is None
+                    or route["hop_count"] != 1
+                    or now - route["updated_at"] > ROUTE_LEASE_SECONDS):
+                continue
+            frame = pack_packet(
+                self.node_id, "*", ttl=4, msg_type=TYPE_TOPOLOGY_REPORT,
+                payload=int(neighbor[5:], 16).to_bytes(2, "big"),
+                message_id=self._next_packet_id(),
+            )
+            try:
+                self.accept(frame)
+            except ValueError as error:
+                LOG.warning("Could not queue topology report: %s", error)
+                break
+            self.on_event({"event": "LINK_UPDATE", "source": self.node_id,
+                           "target": neighbor, "active": True})
+
     def next_hop_for(self, destination, excluded=(), available=None):
         if destination in self.colliding_node_ids:
             return None
@@ -592,6 +617,7 @@ class PeerQueue:
     def report_packet(self, packet, status, current_hop_source=None, reason=None):
         if packet["type_id"] in {
             TYPE_LINK_REPORT,
+            TYPE_TOPOLOGY_REPORT,
             TYPE_ROUTE_ADVERTISEMENT,
             TYPE_EVENT_REPORT,
             TYPE_EVENT_ACK,
@@ -914,6 +940,7 @@ async def run(queue, service, inbox, local_address, local_server=True):
                                 next_announce = now + 5
                             if now >= next_route_advertisement:
                                 queue.advertise_routes(neighbors.keys())
+                                queue.advertise_topology()
                                 next_route_advertisement = now + ROUTE_ADVERTISEMENT_INTERVAL
                             for address, task in list(links.items()):
                                 if task.done():

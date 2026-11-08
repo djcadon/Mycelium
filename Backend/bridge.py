@@ -133,6 +133,11 @@ class BleUiBridge:
             if existing_link and occurred_at < existing_link.get("observedAt", 0):
                 return
             link = {"id": link_id, "source": source, "target": target, "active": active}
+            # Adjacency heartbeats carry no new signal measurement.
+            if existing_link:
+                for field in ("rssi", "rssiMedian", "rssiMad", "sampleCount", "measurementWindowMs"):
+                    if field in existing_link:
+                        link[field] = existing_link[field]
             rssi = event.get("rssi")
             if (
                 isinstance(rssi, (int, float))

@@ -37,6 +37,24 @@ Diagnostic logs go to stderr. Structured event dumps are `DEBUG` only, so
 periodic node announcements do not clutter normal container output. The laptop
 bridge receives topology and packet reports directly over the BLE mesh.
 
+## Mesh-wide topology reports
+
+Updated peers flood a compact `TOPOLOGY_REPORT` (type `0x0B`) every five
+seconds for each direct neighbor confirmed by a current route advertisement.
+These reports are independent of RSSI scanner callbacks, so connected peers
+can continue reporting adjacency when advertising stops. The laptop combines
+reports from remote peers into the same graph as its own links. No inferred
+physical position or invented intermediate connection is used.
+
+Reports use the existing 20-byte frame, TTL 4, deduplication and bounded
+relay queue. Visibility is limited to reports that reach the laptop within
+that hop budget; disconnected partitions cannot be displayed as live.
+Expired direct routes stop generating reports and the bridge expires links
+after 20 seconds without a report. Update `ble.py`, `peer.py`, and
+`protocol.py` together on every reporting/relay board, rebuild its Brick
+container, and update/restart the laptop bridge. Restarting an old Docker
+image does not install changed Python files.
+
 ## Laptop BLE bridge
 
 Run `Backend/bridge.py` on Windows with `--node-id Node-0000`. The laptop acts

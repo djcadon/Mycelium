@@ -77,6 +77,39 @@ class FakeMeshNode:
 
 
 class BleIntegrationTests(unittest.TestCase):
+    def test_remote_topology_reaches_laptop_through_relay_without_rssi(self):
+        from unittest.mock import patch
+        source = PeerQueue("Node-0001", lambda frame: True)
+        source.peer_ids["AA"] = "Node-0002"
+        source.neighbor_routes["AA"] = {"Node-0002": {
+            "hop_count": 1, "updated_at": time.monotonic(), "sequence": 1}}
+        source.advertise_topology()
+        frame = next(iter(source.pending.values()))[0]
+        self.assertEqual(unpack_packet(frame)["type_id"], protocol.TYPE_TOPOLOGY_REPORT)
+        relay = PeerQueue("Node-0002", lambda frame: True)
+        relay.accept(frame, incoming=True, source="BB")
+        forwarded = next(iter(relay.pending.values()))[0]
+        self.assertEqual(unpack_packet(forwarded)["hop_count"], 1)
+        events = []
+        with patch.object(ble, "MY_NODE_ID", "Node-0000"):
+            ble.process_received_frame(forwarded, deduplicate=False, event_callback=events.append)
+        bridge = RecordingBridge()
+        for event in events:
+            asyncio.run(bridge.handle_device_event(event))
+        self.assertIn("Node-0001", bridge.nodes)
+        self.assertIn("Node-0002", bridge.nodes)
+        self.assertTrue(bridge.links["Node-0001->Node-0002"]["active"])
+        self.assertNotIn("rssi", bridge.links["Node-0001->Node-0002"])
+        source.pending.clear()
+        source.neighbor_routes["AA"]["Node-0002"]["updated_at"] -= 31
+        source.advertise_topology()
+        self.assertFalse(source.pending)
+
+    def test_topology_report_preserves_zero_node_id(self):
+        frame = pack_packet("Node-6EBB", "*", msg_type=protocol.TYPE_TOPOLOGY_REPORT,
+                            payload=b"\x00\x00", message_id=999)
+        self.assertEqual(unpack_packet(frame)["raw_payload"][:2], b"\x00\x00")
+
     def test_direct_link_count_matches_visible_neighbors_not_scan_count(self):
         bridge = RecordingBridge()
 
