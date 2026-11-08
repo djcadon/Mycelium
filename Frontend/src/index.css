@@ -59,7 +59,7 @@
 }
 
 .app-frame {
-  width: min(1500px, 100%);
+  width: min(1800px, 100%);
   margin: 0 auto;
 }
 
@@ -281,7 +281,7 @@
 
 .map-stage {
   position: relative;
-  min-height: 440px;
+  min-height: 560px;
   margin: 0 14px;
   overflow: hidden;
   border: 1px solid #e5e0d2;
@@ -295,7 +295,7 @@
 .network-map {
   display: block;
   width: 100%;
-  height: clamp(400px, 59vh, 690px);
+  height: clamp(560px, 72vh, 960px);
 }
 
 .scene-node-label {
@@ -422,6 +422,41 @@
   color: #9a9787;
   font-family: Georgia, "Times New Roman", serif;
   font-size: 17px;
+}
+
+.peer-picker {
+  display: grid;
+  gap: 5px;
+  max-height: 180px;
+  margin: 14px 0 2px;
+  overflow-y: auto;
+}
+
+.peer-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  color: var(--soft-ink);
+  background: rgba(250, 248, 240, 0.48);
+  cursor: pointer;
+  font-size: 11px;
+  text-align: left;
+}
+
+.peer-option:hover,
+.peer-option.is-selected {
+  border-color: #b7b49f;
+  color: var(--forest);
+  background: rgba(250, 248, 240, 0.88);
+}
+
+.peer-option .peer-status {
+  width: 8px;
+  height: 8px;
+  border: 0;
 }
 
 .peer-title {

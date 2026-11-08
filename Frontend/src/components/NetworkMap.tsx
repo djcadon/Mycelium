@@ -17,6 +17,12 @@ interface Point {
   y: number;
 }
 
+interface SpatialPoint {
+  x: number;
+  y: number;
+  z: number;
+}
+
 function getTopologyLayout(nodes: MeshNode[], links: MeshLink[]): Map<string, Point> {
   const points = new Map<string, Point>();
   if (nodes.length === 0) return points;
@@ -74,35 +80,57 @@ function getTopologyLayout(nodes: MeshNode[], links: MeshLink[]): Map<string, Po
   return points;
 }
 
-function getDisplayLayout(nodes: MeshNode[], links: MeshLink[]): Map<string, Point> {
+function getDisplayLayout(nodes: MeshNode[], links: MeshLink[]): Map<string, SpatialPoint> {
   const topologyPoints = getTopologyLayout(nodes, links);
-  const points = new Map<string, Point>();
+  const rawPoints = new Map<string, SpatialPoint>();
   const hasCompleteCoordinates = nodes.length > 0 && nodes.every(
     (node) => node.positionSource === 'measured' || node.positionSource === 'estimated',
   );
+  const hasComplete3DCoordinates = hasCompleteCoordinates && nodes.every(
+    (node) => node.positionDimensions === 3,
+  );
 
   for (const node of nodes) {
-    if (hasCompleteCoordinates) {
-      points.set(node.id, {
+    if (hasComplete3DCoordinates) {
+      rawPoints.set(node.id, {
         x: node.position[0],
-        y: node.position[2],
+        y: node.position[1],
+        z: node.position[2],
+      });
+    } else if (hasCompleteCoordinates) {
+      rawPoints.set(node.id, {
+        x: node.position[0],
+        y: 0,
+        z: node.position[2],
       });
     } else {
-      points.set(node.id, topologyPoints.get(node.id) ?? { x: 0, y: 0 });
+      const point = topologyPoints.get(node.id) ?? { x: 0, y: 0 };
+      rawPoints.set(node.id, { x: point.x, y: 0, z: point.y });
     }
   }
 
-  if (points.size === 0) return points;
-  const xs = [...points.values()].map((point) => point.x);
-  const ys = [...points.values()].map((point) => point.y);
+  if (rawPoints.size === 0) return rawPoints;
+  const xs = [...rawPoints.values()].map((point) => point.x);
+  const ys = [...rawPoints.values()].map((point) => point.y);
+  const zs = [...rawPoints.values()].map((point) => point.z);
   const centerX = (Math.min(...xs) + Math.max(...xs)) / 2;
   const centerY = (Math.min(...ys) + Math.max(...ys)) / 2;
-  const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1);
-  const scale = 8 / span;
+  const centerZ = (Math.min(...zs) + Math.max(...zs)) / 2;
+  const span = Math.max(
+    Math.max(...xs) - Math.min(...xs),
+    Math.max(...ys) - Math.min(...ys),
+    Math.max(...zs) - Math.min(...zs),
+    1,
+  );
+  const scale = 16 / span;
 
-  return new Map([...points.entries()].map(([id, point]) => [
+  return new Map([...rawPoints.entries()].map(([id, point]) => [
     id,
-    { x: (point.x - centerX) * scale, y: (point.y - centerY) * scale },
+    {
+      x: (point.x - centerX) * scale,
+      y: (point.y - centerY) * scale,
+      z: (point.z - centerZ) * scale,
+    },
   ]));
 }
 
@@ -122,7 +150,7 @@ export function NetworkMap({
         return {
           ...node,
           position: point
-            ? [point.x, 0, point.y] as [number, number, number]
+            ? [point.x, point.y, point.z] as [number, number, number]
             : [0, 0, 0] as [number, number, number],
         };
       }),
@@ -130,13 +158,13 @@ export function NetworkMap({
   );
 
   return (
-    <div className="map-stage" role="group" aria-label="Two-dimensional mesh network map">
+    <div className="map-stage" role="group" aria-label="Top-down positional mesh map">
       <Canvas
         className="network-map"
+        orthographic
         camera={{
-          position: [0, 18, 0],
+          position: [0, 20, 0],
           up: [0, 0, -1],
-          fov: 42,
         }}
         gl={{ alpha: true, antialias: true }}
         dpr={[1, 1.5]}

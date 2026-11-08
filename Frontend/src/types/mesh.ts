@@ -26,7 +26,7 @@ export interface MeshLink {
   id: string;
   source: string;
   target: string;
-  rssi: number; // dBm (e.g. -45 to -90)
+  rssi?: number; // dBm when measured; omitted for IP-only links
   active: boolean;
 }
 

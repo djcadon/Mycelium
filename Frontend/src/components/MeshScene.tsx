@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Html, OrbitControls, Ring, Sphere } from '@react-three/drei';
+import { Bounds, Html, OrbitControls, Ring, Sphere } from '@react-three/drei';
 import * as THREE from 'three';
 import type { MeshAlert, MeshNode, MeshLink, HopPacket } from '../types/mesh';
 
@@ -39,14 +39,18 @@ const NodeMesh: React.FC<{
   });
 
   return (
-    <group
-      position={node.position}
-      ref={meshRef}
-      onClick={(event) => {
-        event.stopPropagation();
-        onSelect();
-      }}
-    >
+    <group position={node.position} ref={meshRef}>
+      <Sphere
+        position={[0, 0.12, 0]}
+        args={[0.52, 16, 16]}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect();
+        }}
+      >
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} colorWrite={false} />
+      </Sphere>
+
       <Sphere position={[0, 0.12, 0]} args={[0.24, 24, 24]}>
         <meshStandardMaterial color={color} roughness={0.88} metalness={0} />
       </Sphere>
@@ -82,8 +86,8 @@ const LinkLine: React.FC<{
   if (!sourceNode || !targetNode || !link.active) return null;
 
   const points = [
-    new THREE.Vector3(sourceNode.position[0], 0.035, sourceNode.position[2]),
-    new THREE.Vector3(targetNode.position[0], 0.035, targetNode.position[2]),
+    new THREE.Vector3(sourceNode.position[0], sourceNode.position[1] + 0.035, sourceNode.position[2]),
+    new THREE.Vector3(targetNode.position[0], targetNode.position[1] + 0.035, targetNode.position[2]),
   ];
   const geometry = new THREE.BufferGeometry().setFromPoints(points);
   const color = link.rssi === undefined
@@ -147,40 +151,53 @@ export const MeshScene: React.FC<MeshSceneProps> = ({
 }) => {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   const alertNodeIds = new Set(alerts.filter((alert) => alert.resolvedAt === undefined).map((alert) => alert.nodeId));
+  const layoutKey = nodes
+    .map((node) => `${node.id}:${node.position.join(',')}`)
+    .join('|');
 
   return (
     <>
       <ambientLight intensity={1.6} />
       <directionalLight position={[3, 8, 4]} intensity={1.1} color="#fff9e9" />
-      <gridHelper args={[12, 24, '#d7d1bf', '#e9e3d5']} position={[0, -0.03, 0]} />
 
       <OrbitControls
         makeDefault
         enableRotate={false}
-        minDistance={8}
-        maxDistance={25}
+        minZoom={0.1}
+        maxZoom={100}
+        mouseButtons={{
+          LEFT: THREE.MOUSE.PAN,
+          MIDDLE: THREE.MOUSE.DOLLY,
+          RIGHT: THREE.MOUSE.PAN,
+        }}
         enableDamping
         dampingFactor={0.08}
       />
 
-      {links.map((link) => (
-        <LinkLine
-          key={link.id}
-          link={link}
-          sourceNode={nodeMap.get(link.source)}
-          targetNode={nodeMap.get(link.target)}
-        />
-      ))}
+      {nodes.length > 0 && (
+        <Bounds key={layoutKey} fit margin={1.12}>
+          <group>
+            {links.map((link) => (
+              <LinkLine
+                key={link.id}
+                link={link}
+                sourceNode={nodeMap.get(link.source)}
+                targetNode={nodeMap.get(link.target)}
+              />
+            ))}
 
-      {nodes.map((node) => (
-        <NodeMesh
-          key={node.id}
-          node={node}
-          isSelected={node.id === selectedNodeId}
-          hasAlert={alertNodeIds.has(node.id)}
-          onSelect={() => onSelectNode(node.id)}
-        />
-      ))}
+            {nodes.map((node) => (
+              <NodeMesh
+                key={node.id}
+                node={node}
+                isSelected={node.id === selectedNodeId}
+                hasAlert={alertNodeIds.has(node.id)}
+                onSelect={() => onSelectNode(node.id)}
+              />
+            ))}
+          </group>
+        </Bounds>
+      )}
 
       {packets.filter((packet) => packet.status === 'forwarding' && packet.progress >= 0).map((packet) => (
         <PacketParticle key={packet.id} packet={packet} nodes={nodes} />

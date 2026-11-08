@@ -1,6 +1,6 @@
 import type { MeshAlert, MeshLink, MeshNode, HopPacket } from '../types/mesh';
 
-export const MAX_PAYLOAD_BYTES = 13;
+export const MAX_PAYLOAD_BYTES = 512;
 
 export type BridgeEvent =
   | { type: 'STATE_SNAPSHOT'; nodes: MeshNode[]; links: MeshLink[]; alerts: MeshAlert[]; packets: HopPacket[] }
@@ -143,11 +143,12 @@ function parseLink(value: unknown): MeshLink {
   const input = record(value, 'link');
   const id = string(input.id, 'link.id');
   if (typeof input.active !== 'boolean') throw new Error(`link ${id}.active must be a boolean`);
+  const rssi = input.rssi === undefined ? undefined : number(input.rssi, `link ${id}.rssi`);
   return {
     id,
     source: string(input.source, `link ${id}.source`),
     target: string(input.target, `link ${id}.target`),
-    rssi: number(input.rssi, `link ${id}.rssi`),
+    ...(rssi === undefined ? {} : { rssi }),
     active: input.active,
   };
 }

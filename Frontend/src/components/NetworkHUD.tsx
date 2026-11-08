@@ -106,7 +106,7 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
     : [];
   const mapDescription = nodes.length === 0 || reportedPositionCount < nodes.length
     ? `Topology diagram · not to scale${reportedPositionCount ? ` · ${reportedPositionCount}/${nodes.length} coordinates` : ''}`
-    : nodes.some((node) => node.positionDimensions === 3)
+    : nodes.every((node) => node.positionDimensions === 3)
       ? '3D coordinates · top-down projection'
       : `${measuredCount} measured · ${estimatedCount} estimated · fitted to view`;
 
@@ -192,7 +192,7 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
             <span><i className="legend-dot sending" /> Transmitting</span>
             <span><i className="legend-dot alert" /> Alert</span>
             <span><i className="legend-dot offline" /> Offline</span>
-            <span className="legend-note">Only bridge-reported links and packet hops are shown</span>
+            <span className="legend-note">Drag to pan · scroll to zoom · click to select · links are bridge-reported</span>
           </div>
         </section>
 
@@ -202,6 +202,23 @@ export const NetworkHUD: React.FC<NetworkHUDProps> = ({
               <span className="eyebrow">Selected peer</span>
               <span className="peer-count">{peers.length.toString().padStart(2, '0')}</span>
             </div>
+
+            {peers.length > 0 && (
+              <div className="peer-picker" role="group" aria-label="Select a peer">
+                {peers.map((peer) => (
+                  <button
+                    className={`peer-option${peer.id === selectedNodeId ? ' is-selected' : ''}`}
+                    key={peer.id}
+                    type="button"
+                    aria-pressed={peer.id === selectedNodeId}
+                    onClick={() => onSelectNode(peer.id)}
+                  >
+                    <span className={`peer-status status-${peer.status}`} aria-hidden="true" />
+                    <span>{peer.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
 
             {selectedNode ? (
               <>
