@@ -1,192 +1,341 @@
-import React from 'react';
-import { AlertTriangle, Zap, Power, Network, Wifi, Activity } from 'lucide-react';
-import type { MeshNode, MeshLink, HopPacket } from '../types/mesh';
+import React, { useState } from 'react';
+import { AlertTriangle, Leaf, MapPin, Radio, Send } from 'lucide-react';
+import type {
+  MeshAlert,
+  MeshNode,
+  MeshLink,
+  HopPacket,
+  OutboundMessage,
+} from '../types/mesh';
+import type { BridgeConnectionStatus } from '../hooks/useMeshBridge';
+import { MAX_PAYLOAD_BYTES } from '../services/bridgeProtocol';
+import { NetworkMap } from './NetworkMap';
 
 interface NetworkHUDProps {
   nodes: MeshNode[];
   links: MeshLink[];
   packets: HopPacket[];
-  isLiveConnected: boolean;
-  onTriggerPacket: (originId: string, targetId: string, type: 'HEARTBEAT' | 'SOS' | 'DATA') => void;
-  onToggleNodeStatus: (nodeId: string) => void;
+  alerts: MeshAlert[];
+  messages: OutboundMessage[];
+  connectionStatus: BridgeConnectionStatus;
+  lastEventAt: number | null;
+  error: string | null;
+  onSendMessage: (targetId: string, payload: string) => string;
   selectedNode: MeshNode | null;
+  selectedNodeId: string | null;
+  onSelectNode: (nodeId: string) => void;
+}
+
+function formatTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function timeSince(timestamp: number): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 5) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  return `${Math.floor(seconds / 60)}m ago`;
+}
+
+function messageStateLabel(status: OutboundMessage['status']): string {
+  switch (status) {
+    case 'sending': return 'Sending request';
+    case 'queued': return 'Accepted by bridge';
+    case 'forwarding': return 'Forwarding';
+    case 'awaiting_ack': return 'Awaiting destination ACK';
+    case 'unconfirmed': return 'Bridge response unconfirmed';
+    case 'delivered': return 'Destination acknowledged';
+    case 'echo_received': return 'Echo received';
+    case 'failed': return 'Failed';
+  }
 }
 
 export const NetworkHUD: React.FC<NetworkHUDProps> = ({
   nodes,
   links,
   packets,
-  isLiveConnected,
-  onTriggerPacket,
-  onToggleNodeStatus,
+  alerts,
+  messages,
+  connectionStatus,
+  lastEventAt,
+  error,
+  onSendMessage,
   selectedNode,
+  selectedNodeId,
+  onSelectNode,
 }) => {
-  const onlinePeers = nodes.filter((n) => n.status !== 'offline');
-  const activeLinks = links.filter((l) => l.active).length;
-  const alertCount = nodes.filter((n) => n.status === 'alert').length;
+  const [draft, setDraft] = useState('');
+  const peers = nodes.filter((node) => node.hardware !== 'Host Controller');
+  const onlinePeers = peers.filter((node) => node.status !== 'offline');
+  const activeLinks = links.filter((link) => link.active).length;
+  const inFlightPackets = packets.filter((packet) =>
+    packet.status === 'forwarding' || packet.status === 'awaiting_ack',
+  );
+  const openAlerts = alerts.filter((alert) => alert.resolvedAt === undefined);
+  const canSend = connectionStatus === 'connected' &&
+    selectedNode !== null &&
+    selectedNode.hardware !== 'Host Controller' &&
+    selectedNode.status !== 'offline';
+  const selectedLinks = selectedNode
+    ? links.filter(
+        (link) =>
+          link.active &&
+          (link.source === selectedNode.id || link.target === selectedNode.id),
+      )
+    : [];
+  const reportedRssi = selectedLinks
+    .map((link) => link.rssi)
+    .filter((rssi): rssi is number => typeof rssi === 'number');
+  const strongestRssi = reportedRssi.length ? Math.max(...reportedRssi) : null;
+  const payloadBytes = new TextEncoder().encode(draft).length;
+  const recentMessages = [...messages].slice(-5).reverse();
+  const recentAlerts = [...alerts].slice(-5).reverse();
+  const connectionText = {
+    connecting: 'Connecting to bridge',
+    connected: 'Bridge connected',
+    reconnecting: 'Reconnecting to bridge',
+    disconnected: 'Bridge disconnected',
+  }[connectionStatus];
+  const measuredCount = nodes.filter((node) => node.positionSource === 'measured').length;
+  const estimatedCount = nodes.filter((node) => node.positionSource === 'estimated').length;
+  const reportedPositionCount = measuredCount + estimatedCount;
+  const selectedCoordinates = selectedNode
+    ? selectedNode.positionDimensions === 2
+      ? [selectedNode.position[0], selectedNode.position[2]]
+      : selectedNode.position
+    : [];
+  const mapDescription = nodes.length === 0 || reportedPositionCount < nodes.length
+    ? `Topology diagram · not to scale${reportedPositionCount ? ` · ${reportedPositionCount}/${nodes.length} coordinates` : ''}`
+    : nodes.some((node) => node.positionDimensions === 3)
+      ? '3D coordinates · top-down projection'
+      : `${measuredCount} measured · ${estimatedCount} estimated · fitted to view`;
+
+  const submitMessage = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedNode || !canSend) return;
+    onSendMessage(selectedNode.id, draft);
+    setDraft('');
+  };
 
   return (
-    <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-6">
-      {/* Top Header */}
-      <div className="flex items-start justify-between">
-        <div className="pointer-events-auto rounded-xl border border-slate-700/60 bg-slate-900/85 p-4 shadow-2xl backdrop-blur-md">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
-              <Network className="h-5 w-5 animate-pulse" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg font-bold tracking-wider text-slate-100 uppercase">
-                  Mycelium <span className="text-emerald-400 font-mono text-sm">3D RF MESH</span>
-                </h1>
-                {isLiveConnected ? (
-                  <span className="flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 border border-emerald-500/40 animate-pulse">
-                    <Wifi className="h-3 w-3" /> LIVE RF BRIDGE ACTIVE
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1 rounded-full bg-sky-500/20 px-2 py-0.5 text-[10px] font-semibold text-sky-300 border border-sky-500/30">
-                    <Activity className="h-3 w-3" /> SIMULATION ENGINE
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-slate-400">
-                Physics-based 3D Spatial Localization • Force-Directed Relaxation
-              </p>
-            </div>
-          </div>
-
-          {/* Metrics */}
-          <div className="mt-4 grid grid-cols-4 gap-3 border-t border-slate-800 pt-3 text-center">
-            <div>
-              <span className="block text-xs text-slate-400">Peers Online</span>
-              <span className="font-mono text-base font-bold text-slate-100">
-                {onlinePeers.length}/{nodes.length}
-              </span>
-            </div>
-            <div>
-              <span className="block text-xs text-slate-400">P2P Links</span>
-              <span className="font-mono text-base font-bold text-emerald-400">
-                {activeLinks}
-              </span>
-            </div>
-            <div>
-              <span className="block text-xs text-slate-400">In-Flight</span>
-              <span className="font-mono text-base font-bold text-sky-400">
-                {packets.length}
-              </span>
-            </div>
-            <div>
-              <span className="block text-xs text-slate-400">Alerts</span>
-              <span className={`font-mono text-base font-bold ${alertCount > 0 ? 'text-red-400 animate-bounce' : 'text-slate-400'}`}>
-                {alertCount}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Action Controls */}
-        <div className="pointer-events-auto flex flex-col gap-2 rounded-xl border border-slate-700/60 bg-slate-900/85 p-3 shadow-2xl backdrop-blur-md">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 px-1">
-            Mesh Actions
+    <div className="app-frame">
+      <header className="masthead">
+        <a className="brand" href="/" aria-label="Mycelium home">
+          <span className="brand-mark"><Leaf size={21} strokeWidth={1.7} /></span>
+          <span>
+            <span className="brand-kicker">Field systems · 01</span>
+            <span className="brand-name">Mycelium</span>
           </span>
-          <button
-            onClick={() => {
-              const ids = nodes.map(n => n.id);
-              if (ids.length >= 2) onTriggerPacket(ids[0], ids[ids.length - 1], 'DATA');
-            }}
-            className="flex items-center gap-2 rounded-lg bg-emerald-500/20 px-3 py-2 text-xs font-semibold text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition cursor-pointer"
-          >
-            <Zap className="h-4 w-4" /> Broadcast Multi-Hop Packet
-          </button>
-          <button
-            onClick={() => {
-              const ids = nodes.map(n => n.id);
-              if (ids.length >= 2) onTriggerPacket(ids[ids.length - 1], ids[0], 'SOS');
-            }}
-            className="flex items-center gap-2 rounded-lg bg-red-500/20 px-3 py-2 text-xs font-semibold text-red-300 border border-red-500/30 hover:bg-red-500/30 transition cursor-pointer"
-          >
-            <AlertTriangle className="h-4 w-4" /> Trigger Remote SOS Alert
-          </button>
+        </a>
+        <div className="masthead-title">
+          <span>Mesh observatory</span>
+          <span className="masthead-divider" />
+          <span>Live network</span>
         </div>
-      </div>
+        <div className={`bridge-status connection-${connectionStatus}`}>
+          <span className="status-dot" />
+          <span>{connectionText}</span>
+        </div>
+      </header>
 
-      {/* Zero Nodes Awaiting State */}
-      {nodes.length === 0 && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="pointer-events-auto rounded-2xl border border-emerald-500/30 bg-slate-900/90 p-6 text-center shadow-2xl backdrop-blur-xl max-w-md">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 mb-3">
-              <Wifi className="h-6 w-6 animate-pulse" />
-            </div>
-            <h3 className="font-mono text-sm font-bold uppercase tracking-wider text-slate-100">
-              Scanning for BLE Mesh Nodes
-            </h3>
-            <p className="mt-2 text-xs text-slate-400 leading-relaxed">
-              Wireless Bluetooth bridge listening over the air. Start a Mycelium node to watch it appear in 3D:
-            </p>
-            <code className="mt-3 block rounded-lg bg-slate-950 p-2.5 font-mono text-[11px] text-emerald-300 border border-slate-800 text-left">
-              python3 ble.py listen
-            </code>
-            <p className="mt-2 text-[11px] text-slate-500">
-              Zero USB cables required — pure over-the-air BLE discovery!
-            </p>
-          </div>
+      <section className="metrics-strip" aria-label="Network summary">
+        <div className="metric">
+          <span className="metric-label">Peers online</span>
+          <span className="metric-value">{onlinePeers.length}<small> / {peers.length}</small></span>
+        </div>
+        <div className="metric">
+          <span className="metric-label">Active links</span>
+          <span className="metric-value">{activeLinks}</span>
+        </div>
+        <div className="metric">
+          <span className="metric-label">Packets in flight</span>
+          <span className="metric-value">{inFlightPackets.length}</span>
+        </div>
+        <div className="metric">
+          <span className="metric-label">Open alerts</span>
+          <span className={`metric-value${openAlerts.length ? ' has-alert' : ''}`}>{openAlerts.length}</span>
+        </div>
+        <span className="strip-note">
+          <Radio size={14} />
+          {lastEventAt ? `Updated ${timeSince(lastEventAt)}` : 'Waiting for bridge events'}
+        </span>
+      </section>
+
+      {error && (
+        <div className="bridge-error" role="status" aria-live="polite">
+          <AlertTriangle size={15} />
+          <span>{error}</span>
         </div>
       )}
 
-      {/* Selected Peer Inspector */}
-      {selectedNode && (
-        <div className="pointer-events-auto flex justify-center">
-          <div className="w-full max-w-xl rounded-xl border border-slate-700/80 bg-slate-900/95 p-4 shadow-2xl backdrop-blur-lg">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-3">
-                <div className={`h-3 w-3 rounded-full ${selectedNode.status === 'online' ? 'bg-emerald-400 shadow-[0_0_8px_#10b981]' : selectedNode.status === 'alert' ? 'bg-red-500 shadow-[0_0_8px_#ef4444]' : 'bg-slate-500'}`} />
-                <div>
-                  <h3 className="font-mono text-sm font-bold text-slate-100">
-                    {selectedNode.name} <span className="text-xs text-slate-400 font-normal">({selectedNode.ip})</span>
-                  </h3>
-                  <span className="text-xs text-emerald-400 uppercase font-semibold">
-                    Equal Peer • {selectedNode.hardware}
-                  </span>
+      <main className="workspace">
+        <section className="map-panel" aria-labelledby="map-title">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">Live field / network layer</span>
+              <h1 id="map-title">The mesh</h1>
+            </div>
+            <span className="map-scale">{mapDescription}</span>
+          </div>
+
+          <NetworkMap
+            nodes={nodes}
+            links={links}
+            packets={packets}
+            alerts={alerts}
+            selectedNodeId={selectedNodeId}
+            onSelectNode={onSelectNode}
+          />
+
+          <div className="map-legend">
+            <span><i className="legend-dot healthy" /> Online</span>
+            <span><i className="legend-dot sending" /> Transmitting</span>
+            <span><i className="legend-dot alert" /> Alert</span>
+            <span><i className="legend-dot offline" /> Offline</span>
+            <span className="legend-note">Only bridge-reported links and packet hops are shown</span>
+          </div>
+        </section>
+
+        <aside className="side-rail">
+          <section className="rail-section">
+            <div className="rail-heading">
+              <span className="eyebrow">Selected peer</span>
+              <span className="peer-count">{peers.length.toString().padStart(2, '0')}</span>
+            </div>
+
+            {selectedNode ? (
+              <>
+                <div className="peer-title">
+                  <span className={`peer-status status-${selectedNode.status}`} aria-hidden="true" />
+                  <div>
+                    <h2>{selectedNode.name}</h2>
+                    <p>{selectedNode.id}</p>
+                  </div>
                 </div>
+                <dl className="peer-facts">
+                  <div><dt>State</dt><dd>{selectedNode.status}</dd></div>
+                  <div><dt>Hardware</dt><dd>{selectedNode.hardware}</dd></div>
+                  <div><dt>Direct links</dt><dd>{selectedNode.neighborCount ?? '—'}</dd></div>
+                  <div><dt>Strongest RSSI</dt><dd>{strongestRssi === null ? '—' : `${strongestRssi} dBm`}</dd></div>
+                  <div><dt>Last seen</dt><dd>{timeSince(selectedNode.lastSeen)}</dd></div>
+                  <div>
+                    <dt>Position</dt>
+                    <dd>
+                      {selectedNode.positionSource === 'measured' || selectedNode.positionSource === 'estimated'
+                        ? `${selectedNode.positionSource} · ${selectedCoordinates.map((value) => value.toFixed(1)).join(', ')}${selectedNode.positionUnits ? ` ${selectedNode.positionUnits}` : ''}`
+                        : 'Diagrammatic only'}
+                    </dd>
+                  </div>
+                  {selectedNode.positionConfidence !== undefined && (
+                    <div><dt>Confidence</dt><dd>{Math.round(selectedNode.positionConfidence * 100)}%</dd></div>
+                  )}
+                </dl>
+              </>
+            ) : (
+              <p className="empty-selection">Waiting for the bridge to report a peer.</p>
+            )}
+          </section>
+
+          <section className="rail-section actions-section">
+            <span className="eyebrow">Send to selected peer</span>
+            <p className="section-copy">
+              Bridge acceptance is not delivery. Success appears only after a destination ACK or echo.
+            </p>
+            <form onSubmit={submitMessage}>
+              <textarea
+                aria-label="Message payload"
+                placeholder="Write a short message"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                rows={3}
+                maxLength={MAX_PAYLOAD_BYTES}
+              />
+              <div className={`payload-count${payloadBytes > MAX_PAYLOAD_BYTES ? ' is-over-limit' : ''}`}>
+                {payloadBytes} / {MAX_PAYLOAD_BYTES} bytes
               </div>
               <button
-                onClick={() => onToggleNodeStatus(selectedNode.id)}
-                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium border transition cursor-pointer ${
-                  selectedNode.status === 'offline'
-                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30'
-                    : 'bg-red-500/20 border-red-500/40 text-red-300 hover:bg-red-500/30'
-                }`}
+                className="action-button"
+                type="submit"
+                disabled={!canSend || payloadBytes === 0 || payloadBytes > MAX_PAYLOAD_BYTES}
               >
-                <Power className="h-3.5 w-3.5" />
-                {selectedNode.status === 'offline' ? 'Power On Peer' : 'Simulate Node Drop'}
+                <Send size={16} />
+                <span>Send message</span>
               </button>
-            </div>
+            </form>
+            {!canSend && (
+              <p className="form-hint">
+                {connectionStatus !== 'connected'
+                  ? 'Connect to the bridge to send.'
+                  : selectedNode?.status === 'offline'
+                    ? 'The selected peer is offline.'
+                    : 'Select an online peer on the map.'}
+              </p>
+            )}
+          </section>
 
-            <div className="mt-3 grid grid-cols-4 gap-3 text-center">
-              <div className="rounded-lg bg-slate-800/50 p-2 border border-slate-800">
-                <span className="text-[11px] text-slate-400 block">3D Coordinates</span>
-                <span className="font-mono text-xs font-bold text-sky-400">
-                  {selectedNode.position.map(n => Math.round(n)).join(', ')}
-                </span>
-              </div>
-              <div className="rounded-lg bg-slate-800/50 p-2 border border-slate-800">
-                <span className="text-[11px] text-slate-400 block">Battery</span>
-                <span className="font-mono text-xs font-bold text-slate-200">{selectedNode.battery}%</span>
-              </div>
-              <div className="rounded-lg bg-slate-800/50 p-2 border border-slate-800">
-                <span className="text-[11px] text-slate-400 block">Direct Neighbors</span>
-                <span className="font-mono text-xs font-bold text-emerald-400">
-                  {selectedNode.neighborCount}
-                </span>
-              </div>
-              <div className="rounded-lg bg-slate-800/50 p-2 border border-slate-800">
-                <span className="text-[11px] text-slate-400 block">RF Mode</span>
-                <span className="font-mono text-xs font-bold text-amber-400">IBSS / Pure L2</span>
-              </div>
+          <section className="rail-section event-section">
+            <div className="rail-heading">
+              <span className="eyebrow">Message activity</span>
+              {messages.length > 0 && <span className="peer-count">{messages.length.toString().padStart(2, '0')}</span>}
             </div>
-          </div>
-        </div>
-      )}
+            {recentMessages.length ? (
+              <ul className="event-list" aria-live="polite">
+                {recentMessages.map((message) => (
+                  <li key={message.requestId}>
+                    <div className="event-list-heading">
+                      <strong>{messageStateLabel(message.status)}</strong>
+                      <time>{formatTime(message.createdAt)}</time>
+                    </div>
+                    <span>To {message.targetId}: “{message.payload}”</span>
+                    {message.response && <span className="event-response">{message.response}</span>}
+                    {message.error && <span className="event-error">{message.error}</span>}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="empty-selection">Sent messages and destination responses will appear here.</p>
+            )}
+          </section>
+
+          <section className="rail-section event-section">
+            <div className="rail-heading">
+              <span className="eyebrow">Network alerts</span>
+              <span className={`peer-count${openAlerts.length ? ' has-alert' : ''}`}>
+                {openAlerts.length.toString().padStart(2, '0')}
+              </span>
+            </div>
+            {recentAlerts.length ? (
+              <ul className="event-list">
+                {recentAlerts.map((alert) => (
+                  <li key={alert.id} className={alert.resolvedAt ? 'is-resolved' : ''}>
+                    <div className="event-list-heading">
+                      <strong>{alert.kind}{alert.resolvedAt ? ' · Resolved' : ' · Open'}</strong>
+                      <time>{formatTime(alert.occurredAt)}</time>
+                    </div>
+                    <span>{alert.nodeId}{alert.message ? `: ${alert.message}` : ''}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="empty-selection">No alert events reported by the bridge.</p>
+            )}
+          </section>
+
+          <section className="rail-note">
+            <MapPin size={17} />
+            <p>Unmeasured peers use a diagrammatic layout. RSSI and topology alone do not establish physical coordinates.</p>
+          </section>
+        </aside>
+      </main>
+
+      <footer className="page-footer">
+        <span>MYCELIUM / FIELD NOTES</span>
+        <span>
+          {lastEventAt
+            ? `Last bridge event ${formatTime(lastEventAt)}`
+            : 'No live events received yet'}
+        </span>
+      </footer>
     </div>
   );
 };

@@ -1,79 +1,73 @@
 import React, { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { OrbitControls, Html, Sphere, Ring, Sparkles } from '@react-three/drei';
+import { Html, OrbitControls, Ring, Sphere } from '@react-three/drei';
 import * as THREE from 'three';
-import type { MeshNode, MeshLink, HopPacket } from '../types/mesh';
+import type { MeshAlert, MeshNode, MeshLink, HopPacket } from '../types/mesh';
 
 interface MeshSceneProps {
   nodes: MeshNode[];
   links: MeshLink[];
   packets: HopPacket[];
+  alerts: MeshAlert[];
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string) => void;
 }
 
 const getPeerColor = (status: MeshNode['status']) => {
   switch (status) {
-    case 'offline': return '#64748b';       // Gray
-    case 'alert': return '#ef4444';         // Red
-    case 'transmitting': return '#f59e0b';  // Amber
+    case 'offline': return '#999487';
+    case 'alert': return '#a9563e';
+    case 'transmitting': return '#b28a49';
     case 'online':
-    default: return '#10b981';              // Emerald (Equal peer)
+    default: return '#536b43';
   }
 };
 
 const NodeMesh: React.FC<{
   node: MeshNode;
   isSelected: boolean;
+  hasAlert: boolean;
   onSelect: () => void;
-}> = ({ node, isSelected, onSelect }) => {
+}> = ({ node, isSelected, hasAlert, onSelect }) => {
   const meshRef = useRef<THREE.Group>(null);
-  const color = getPeerColor(node.status);
+  const color = hasAlert ? '#a9563e' : getPeerColor(node.status);
 
   useFrame((state) => {
-    if (meshRef.current && node.status !== 'offline') {
-      meshRef.current.rotation.y += 0.01;
-      if (isSelected) {
-        const s = 1 + Math.sin(state.clock.elapsedTime * 6) * 0.08;
-        meshRef.current.scale.set(s, s, s);
-      }
-    }
+    if (!meshRef.current) return;
+    const scale = isSelected ? 1 + Math.sin(state.clock.elapsedTime * 3) * 0.025 : 1;
+    meshRef.current.scale.setScalar(scale);
   });
 
   return (
-    <group position={node.position} ref={meshRef} onClick={(e) => { e.stopPropagation(); onSelect(); }}>
-      {/* Peer Core Sphere */}
-      <Sphere args={[0.55, 32, 32]}>
-        <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={node.status === 'offline' ? 0.05 : isSelected ? 0.9 : 0.45}
-          roughness={0.2}
-          metalness={0.8}
-        />
+    <group
+      position={node.position}
+      ref={meshRef}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect();
+      }}
+    >
+      <Sphere position={[0, 0.12, 0]} args={[0.24, 24, 24]}>
+        <meshStandardMaterial color={color} roughness={0.88} metalness={0} />
       </Sphere>
 
-      {/* Peer Halo Ring */}
-      {node.status !== 'offline' && (
-        <Ring args={[0.75, 0.85, 32]} rotation={[Math.PI / 2, 0, 0]}>
-          <meshBasicMaterial
-            color={color}
-            side={THREE.DoubleSide}
-            transparent
-            opacity={isSelected ? 0.8 : 0.35}
-          />
-        </Ring>
-      )}
+      <Ring
+        args={[0.36, 0.39, 32]}
+        position={[0, 0.025, 0]}
+        rotation={[Math.PI / 2, 0, 0]}
+      >
+        <meshBasicMaterial
+          color={isSelected ? '#775a3e' : color}
+          side={THREE.DoubleSide}
+          transparent
+          opacity={isSelected ? 0.8 : 0.48}
+        />
+      </Ring>
 
-      {/* Peer Label Billboarding */}
-      <Html position={[0, 0.95, 0]} center distanceFactor={15} style={{ pointerEvents: 'none' }}>
-        <div className={`px-2.5 py-0.5 rounded text-xs font-mono font-bold whitespace-nowrap shadow-md backdrop-blur border ${
-          isSelected 
-            ? 'bg-amber-500/20 border-amber-400 text-amber-300' 
-            : 'bg-slate-900/80 border-slate-700/80 text-slate-200'
-        }`}>
-          {node.name}
-          {node.status === 'alert' && <span className="ml-1 text-red-400 animate-pulse">● SOS</span>}
+      <Html position={[0, 0.12, -0.46]} center style={{ pointerEvents: 'none' }}>
+        <div className={`scene-node-label${isSelected ? ' is-selected' : ''}`}>
+          <span>{node.name}</span>
+          {(hasAlert || node.status === 'alert') && <small>SOS</small>}
         </div>
       </Html>
     </group>
@@ -88,27 +82,29 @@ const LinkLine: React.FC<{
   if (!sourceNode || !targetNode || !link.active) return null;
 
   const points = [
-    new THREE.Vector3(...sourceNode.position),
-    new THREE.Vector3(...targetNode.position),
+    new THREE.Vector3(sourceNode.position[0], 0.035, sourceNode.position[2]),
+    new THREE.Vector3(targetNode.position[0], 0.035, targetNode.position[2]),
   ];
   const geometry = new THREE.BufferGeometry().setFromPoints(points);
-
-  const getLinkColor = (rssi: number) => {
-    if (rssi > -60) return '#10b981'; // strong (green)
-    if (rssi > -75) return '#f59e0b'; // medium (amber)
-    return '#ef4444';                 // weak (red)
-  };
+  const color = link.rssi === undefined
+    ? '#999487'
+    : link.rssi > -60
+      ? '#536b43'
+      : link.rssi > -75
+        ? '#b28a49'
+        : '#a9563e';
 
   return (
-    <primitive object={new THREE.Line(
-      geometry,
-      new THREE.LineBasicMaterial({
-        color: getLinkColor(link.rssi),
-        transparent: true,
-        opacity: link.active ? 0.65 : 0.1,
-        linewidth: 2,
-      })
-    )} />
+    <primitive
+      object={new THREE.Line(
+        geometry,
+        new THREE.LineBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.76,
+        }),
+      )}
+    />
   );
 };
 
@@ -117,30 +113,26 @@ const PacketParticle: React.FC<{
   nodes: MeshNode[];
 }> = ({ packet, nodes }) => {
   const meshRef = useRef<THREE.Mesh>(null);
-
-  const sourceNode = nodes.find((n) => n.id === packet.origin);
-  const targetNode = nodes.find((n) => n.id === packet.target);
+  const targetIndex = packet.path.indexOf(packet.currentHop);
+  const sourceId = packet.currentHopSource ??
+    (targetIndex > 0 ? packet.path[targetIndex - 1] : packet.origin);
+  const sourceNode = nodes.find((node) => node.id === sourceId);
+  const targetNode = nodes.find((node) => node.id === packet.currentHop);
 
   useFrame(() => {
-    if (!meshRef.current || !sourceNode || !targetNode) return;
-    const p1 = new THREE.Vector3(...sourceNode.position);
-    const p2 = new THREE.Vector3(...targetNode.position);
-    const currentPos = new THREE.Vector3().lerpVectors(p1, p2, packet.progress);
-    currentPos.y += Math.sin(packet.progress * Math.PI) * 0.8;
-    meshRef.current.position.copy(currentPos);
+    if (!meshRef.current || !sourceNode || !targetNode || packet.status !== 'forwarding') return;
+    const start = new THREE.Vector3(...sourceNode.position);
+    const end = new THREE.Vector3(...targetNode.position);
+    const position = new THREE.Vector3().lerpVectors(start, end, packet.progress);
+    position.y += 0.3;
+    meshRef.current.position.copy(position);
   });
 
   if (!sourceNode || !targetNode) return null;
 
-  const isSos = packet.payload.type === 'SOS';
-
   return (
-    <Sphere ref={meshRef} args={[0.22, 16, 16]}>
-      <meshBasicMaterial
-        color={isSos ? '#ef4444' : '#38bdf8'}
-        transparent
-        opacity={0.9}
-      />
+    <Sphere ref={meshRef} args={[0.075, 12, 12]}>
+      <meshBasicMaterial color={packet.payload.type === 'SOS' ? '#a9563e' : '#b28a49'} />
     </Sphere>
   );
 };
@@ -149,29 +141,28 @@ export const MeshScene: React.FC<MeshSceneProps> = ({
   nodes,
   links,
   packets,
+  alerts,
   selectedNodeId,
   onSelectNode,
 }) => {
-  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const alertNodeIds = new Set(alerts.filter((alert) => alert.resolvedAt === undefined).map((alert) => alert.nodeId));
 
   return (
     <>
-      <ambientLight intensity={0.4} />
-      <pointLight position={[10, 15, 10]} intensity={1.2} />
-      <pointLight position={[-10, -10, -10]} intensity={0.5} color="#10b981" />
-      <gridHelper args={[30, 30, '#1e293b', '#0f172a']} position={[0, -2, 0]} />
-
-      {/* Bioluminescent floating spore particles */}
-      <Sparkles count={120} scale={18} size={2.5} speed={0.3} opacity={0.65} color="#34d399" />
+      <ambientLight intensity={1.6} />
+      <directionalLight position={[3, 8, 4]} intensity={1.1} color="#fff9e9" />
+      <gridHelper args={[12, 24, '#d7d1bf', '#e9e3d5']} position={[0, -0.03, 0]} />
 
       <OrbitControls
         makeDefault
-        minDistance={4}
-        maxDistance={40}
-        maxPolarAngle={Math.PI / 2 + 0.1}
+        enableRotate={false}
+        minDistance={8}
+        maxDistance={25}
+        enableDamping
+        dampingFactor={0.08}
       />
 
-      {/* Mesh peer links */}
       {links.map((link) => (
         <LinkLine
           key={link.id}
@@ -181,18 +172,17 @@ export const MeshScene: React.FC<MeshSceneProps> = ({
         />
       ))}
 
-      {/* Equal peer nodes */}
       {nodes.map((node) => (
         <NodeMesh
           key={node.id}
           node={node}
           isSelected={node.id === selectedNodeId}
+          hasAlert={alertNodeIds.has(node.id)}
           onSelect={() => onSelectNode(node.id)}
         />
       ))}
 
-      {/* In-flight peer packets */}
-      {packets.map((packet) => (
+      {packets.filter((packet) => packet.status === 'forwarding' && packet.progress >= 0).map((packet) => (
         <PacketParticle key={packet.id} packet={packet} nodes={nodes} />
       ))}
     </>
