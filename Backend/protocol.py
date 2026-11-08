@@ -4,13 +4,15 @@ Mycelium - Compact 20-Byte BLE Mesh Protocol
 Encodes and decodes multi-hop routing headers into exactly 20 bytes (BLE ATT MTU limit).
 
 Frame Structure (20 Bytes Exact):
-  [ Origin ID: 2B | Target ID: 2B | TTL: 1B | Hop Count: 1B | Msg Type: 1B | Payload: 13B ]
+  [ Origin ID: 2B | Target ID: 2B | TTL: 1B | Hop Count: 1B | Msg Type: 1B | Message ID: 4B | Payload: 9B ]
 """
 
+import os
 import struct
 from typing import Dict, Any, Union
 
-PACKET_FORMAT = "!HHBBB13s"
+PACKET_FORMAT = "!HHBBBI9s"
+MAX_PAYLOAD = 9
 TOTAL_SIZE = struct.calcsize(PACKET_FORMAT)  # Exactly 20 bytes
 
 # Message Types
@@ -52,6 +54,7 @@ def pack_packet(
     hop_count: int = 0,
     msg_type: int = TYPE_CHAT,
     payload: Union[str, bytes] = "",
+    message_id: int | None = None,
 ) -> bytes:
     """
     Packs a routing frame into exactly 20 bytes.
@@ -59,12 +62,11 @@ def pack_packet(
     origin_int = origin if isinstance(origin, int) else node_id_to_int(origin)
     target_int = target if isinstance(target, int) else node_id_to_int(target)
 
-    # Encode payload to max 13 bytes, padded with null bytes
     if isinstance(payload, str):
-        payload_bytes = payload.encode("utf-8")[:13]
-    else:
-        payload_bytes = bytes(payload)[:13]
-    payload_padded = payload_bytes.ljust(13, b"\x00")
+        payload = payload.encode("utf-8")[:MAX_PAYLOAD].decode("utf-8", "ignore").encode("utf-8")
+    payload_padded = bytes(payload)[:MAX_PAYLOAD].ljust(MAX_PAYLOAD, b"\x00")
+    if message_id is None:
+        message_id = int.from_bytes(os.urandom(4), "big")
 
     return struct.pack(
         PACKET_FORMAT,
@@ -73,6 +75,7 @@ def pack_packet(
         min(max(0, ttl), 255),
         min(max(0, hop_count), 255),
         msg_type,
+        message_id,
         payload_padded,
     )
 
@@ -83,7 +86,7 @@ def unpack_packet(raw_bytes: bytes) -> Dict[str, Any]:
     if len(raw_bytes) != TOTAL_SIZE:
         raise ValueError(f"Invalid packet size: expected {TOTAL_SIZE} bytes, got {len(raw_bytes)}")
 
-    origin_int, target_int, ttl, hop_count, msg_type, payload_padded = struct.unpack(
+    origin_int, target_int, ttl, hop_count, msg_type, message_id, payload_padded = struct.unpack(
         PACKET_FORMAT, raw_bytes
     )
 
@@ -94,6 +97,7 @@ def unpack_packet(raw_bytes: bytes) -> Dict[str, Any]:
         payload_str = payload_clean.hex()
 
     return {
+        "message_id": message_id,
         "origin": int_to_node_id(origin_int),
         "target": int_to_node_id(target_int),
         "ttl": ttl,

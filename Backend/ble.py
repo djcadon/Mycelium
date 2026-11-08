@@ -20,17 +20,19 @@ try:
         TYPE_TELEMETRY,
         TYPE_CHAT,
         TOTAL_SIZE,
+        MAX_PAYLOAD,
     )
 except ImportError:
     # Minimal fallback for MicroPython
     TOTAL_SIZE = 20
+    MAX_PAYLOAD = 9
     TYPE_HEARTBEAT = 0x01
     TYPE_SOS = 0x02
     TYPE_CHAT = 0x04
 
 NAME = "Mycelium"
-SERVICE = "9cd00001-8ed5-4e55-932e-5c558747527a"
-INBOX = "9cd00002-8ed5-4e55-932e-5c558747527a"
+SERVICE = "9cd10001-8ed5-4e55-932e-5c558747527a"
+INBOX = "9cd10002-8ed5-4e55-932e-5c558747527a"
 MAX_BYTES = 20
 
 def get_local_node_id() -> str:
@@ -49,7 +51,7 @@ def get_local_node_id() -> str:
     except Exception:
         return "Node-0001"
 
-MY_NODE_ID = get_local_node_id()
+MY_NODE_ID = os.getenv("MYCELIUM_NODE_ID") or get_local_node_id()
 
 # Set of recently seen packet signatures to prevent routing loops
 SEEN_PACKETS = set()
@@ -61,7 +63,7 @@ def emit_event(event_dict: dict):
     except Exception:
         pass
 
-def process_received_frame(raw_data: bytes, forward_callback=None):
+def process_received_frame(raw_data: bytes, forward_callback=None, deduplicate=True):
     """Decodes a 20-byte BLE mesh frame and decides whether to consume or relay it."""
     data_bytes = bytes(raw_data)
 
@@ -76,13 +78,13 @@ def process_received_frame(raw_data: bytes, forward_callback=None):
             p_type = pkt["type"]
             msg = pkt["payload"]
 
-            # Deduplication key
-            sig = f"{origin}-{target}-{msg}"
-            if sig in SEEN_PACKETS:
-                return
-            SEEN_PACKETS.add(sig)
-            if len(SEEN_PACKETS) > 500:
-                SEEN_PACKETS.pop()
+            if deduplicate:
+                sig = f"{origin}-{target}-{msg}"
+                if sig in SEEN_PACKETS:
+                    return
+                SEEN_PACKETS.add(sig)
+                if len(SEEN_PACKETS) > 500:
+                    SEEN_PACKETS.pop()
 
             # Ignore packets originated by this node
             if origin == MY_NODE_ID:
@@ -199,8 +201,6 @@ async def linux_listen(queue=None):
     gatt_manager = "org.bluez.GattManager1"
     advertising_manager = "org.bluez.LEAdvertisingManager1"
 
-    loop = asyncio.get_running_loop()
-
     def do_relay_forward(frame_bytes, target_node):
         # Spawns a background task to relay the frame to the next hop
         asyncio.create_task(linux_main(frame_bytes, peer=None, forward_mode=True))
@@ -243,7 +243,10 @@ async def linux_listen(queue=None):
             if queue is None or len(value) != TOTAL_SIZE:
                 process_received_frame(value, forward_callback=do_relay_forward)
             else:
-                queue.accept(bytes(value), incoming=True)
+                device = options.get("device")
+                path = device.value if device is not None else ""
+                address = path.rsplit("/dev_", 1)[-1].replace("_", ":") if "/dev_" in path else None
+                queue.accept(bytes(value), incoming=True, source=address)
 
     class Advertisement(ServiceInterface):
         def __init__(self):
@@ -284,26 +287,17 @@ async def linux_listen(queue=None):
         bus.export(service_path + "/char0", InboxCharacteristic())
         bus.export(advertisement_path, Advertisement())
         await adapter.get_interface(gatt_manager).call_register_application(root, {})
-        await adapter.get_interface(advertising_manager).call_register_advertisement(
-            advertisement_path, {}
-        )
-
-        # Announce this node to the 3D bridge
-        emit_event({"event": "NODE_ANNOUNCE", "node_id": MY_NODE_ID, "mac": ""})
-
-        print("=============================================================")
-        print(f" Mycelium BLE Mesh Node Active: {MY_NODE_ID}")
-        print(f" GATT Service: {SERVICE}")
-        print(f" INBOX UUID  : {INBOX} (Max: {MAX_BYTES}B)")
-        print(" Listening for incoming peer packets and relay hops...")
-        print("=============================================================", flush=True)
+        await adapter.get_interface(advertising_manager).call_register_advertisement(advertisement_path, {})
+        local_address = objects[adapter_path]["org.bluez.Adapter1"]["Address"].value.upper()
+        emit_event({"event": "NODE_ANNOUNCE", "node_id": MY_NODE_ID, "mac": local_address})
+        print(f"Mycelium node {MY_NODE_ID}; BLE address {local_address}", flush=True)
 
         if queue is None:
             await bus.wait_for_disconnect()
         else:
             from peer import run
 
-            peer_task = asyncio.create_task(run(queue, SERVICE, INBOX))
+            peer_task = asyncio.create_task(run(queue, SERVICE, INBOX, local_address))
             bus_task = asyncio.create_task(bus.wait_for_disconnect())
             try:
                 done, _ = await asyncio.wait((peer_task, bus_task), return_when=asyncio.FIRST_COMPLETED)
@@ -439,7 +433,10 @@ def main(args=None):
         import asyncio
         from peer import PeerQueue
 
-        asyncio.run(linux_listen(PeerQueue(MY_NODE_ID, process_received_frame)))
+        def receive_chat(frame):
+            process_received_frame(frame, deduplicate=False)
+
+        asyncio.run(linux_listen(PeerQueue(MY_NODE_ID, receive_chat)))
         return
 
     if not args or args == ["listen"]:
@@ -449,18 +446,18 @@ def main(args=None):
         payload = pack_packet(origin=MY_NODE_ID, target="*", ttl=1, hop_count=0, msg_type=TYPE_HEARTBEAT, payload="PING")
     elif args == ["sos"]:
         # Pack an Emergency SOS alert broadcast
-        payload = pack_packet(origin=MY_NODE_ID, target="*", ttl=4, hop_count=0, msg_type=TYPE_SOS, payload="EMERGENCY SOS")
+        payload = pack_packet(origin=MY_NODE_ID, target="*", ttl=4, hop_count=0, msg_type=TYPE_SOS, payload="SOS")
         print(f"[{MY_NODE_ID}] Generated Emergency SOS Broadcast Frame (20B)")
     elif args[:1] == ["send"] and len(args) >= 3:
         target_node = args[1]
         msg = " ".join(args[2:])
         payload = pack_packet(origin=MY_NODE_ID, target=target_node, ttl=4, hop_count=0, msg_type=TYPE_CHAT, payload=msg)
-        print(f"[{MY_NODE_ID}] Packed 20B mesh frame -> Target: {target_node} | '{msg[:13]}'")
+        print(f"[{MY_NODE_ID}] Packed 20B mesh frame -> Target: {target_node} | '{msg[:MAX_PAYLOAD]}'")
     elif args[:1] == ["send"] and len(args) == 2:
         # Broadcast chat
         msg = args[1]
         payload = pack_packet(origin=MY_NODE_ID, target="*", ttl=4, hop_count=0, msg_type=TYPE_CHAT, payload=msg)
-        print(f"[{MY_NODE_ID}] Packed 20B broadcast mesh frame | '{msg[:13]}'")
+        print(f"[{MY_NODE_ID}] Packed 20B broadcast mesh frame | '{msg[:MAX_PAYLOAD]}'")
     else:
         print("Mycelium BLE Mesh Usage:")
         print("  python3 ble.py run")

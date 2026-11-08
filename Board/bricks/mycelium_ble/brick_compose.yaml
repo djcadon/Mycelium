@@ -1,0 +1,11 @@
+services:
+  mycelium_peer:
+    build:
+      context: .
+    volumes:
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+      - /home/arduino/ArduinoApps/mycelium/python:/matrix
+    environment:
+      DBUS_SYSTEM_BUS_ADDRESS: unix:path=/run/dbus/system_bus_socket
+      MYCELIUM_MATRIX_FILE: /matrix/.mycelium-matrix.json
+      MYCELIUM_NODE_ID: Node-6EBA
