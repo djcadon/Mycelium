@@ -1,13 +1,17 @@
 """Linux peer loop and same-user Unix socket for Mycelium."""
 
 import asyncio
+import json
 import os
 import random
 import socket
 import sys
+import tempfile
+import time
 from collections import OrderedDict
+from pathlib import Path
 
-from protocol import TOTAL_SIZE, TYPE_ECHO_REPLY, TYPE_ECHO_REQUEST, pack_packet, unpack_packet
+from protocol import TOTAL_SIZE, TYPE_CHAT, TYPE_ECHO_REPLY, TYPE_ECHO_REQUEST, pack_packet, unpack_packet
 
 SOCKET = f"\0mycelium-ble-{os.getuid()}"
 MAX_PENDING = 128
@@ -20,6 +24,28 @@ class PeerQueue:
         self.on_receive = on_receive
         self.pending = OrderedDict()
         self.seen = OrderedDict()
+        matrix_path = os.environ.get("MYCELIUM_MATRIX_FILE")
+        self.matrix_file = Path(matrix_path) if matrix_path else None
+
+    def publish_chat(self, text):
+        if not self.matrix_file or not text:
+            return
+        temp_file = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.matrix_file.parent, delete=False
+            ) as output:
+                temp_file = Path(output.name)
+                json.dump({"id": time.time_ns(), "text": text}, output)
+            temp_file.chmod(0o644)
+            temp_file.replace(self.matrix_file)
+        except OSError as error:
+            print(f"Matrix update failed: {error}", file=sys.stderr, flush=True)
+            if temp_file is not None:
+                try:
+                    temp_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def accept(self, frame, incoming=False):
         packet = unpack_packet(frame)
@@ -35,6 +61,8 @@ class PeerQueue:
             if packet["origin"] == self.node_id:
                 return
             self.on_receive(frame)
+            if packet["type_id"] == TYPE_CHAT and packet["target"] in (self.node_id, "*"):
+                self.publish_chat(packet["raw_payload"].decode("utf-8", errors="replace"))
             if packet["target"] == self.node_id and packet["type_id"] == TYPE_ECHO_REQUEST:
                 self.accept(pack_packet(
                     self.node_id, packet["origin"], msg_type=TYPE_ECHO_REPLY,
